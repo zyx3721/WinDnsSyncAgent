@@ -1,0 +1,8 @@
+{
+  "scheme": "http",
+  "port": 8443,
+  "allowAnonymous": true,
+  "apiKey": "CHANGE_ME",
+  "logPath": "C:\\ProgramData\\WinDnsSyncAgent\\agent.log"
+}
+

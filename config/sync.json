@@ -1,0 +1,23 @@
+{
+  "sourceAgent": "http://source-dns:8443",
+  "targetAgent": "http://target-dns:8443",
+  "apiKey": "",
+  "includeZones": [
+    "example.com"
+  ],
+  "excludeZones": [],
+  "zoneConcurrency": 2,
+  "syncMode": "mirror",
+  "dryRun": true,
+  "createPtrRecords": false,
+  "enableRewriteRecords": false,
+  "rewriteRecords": [
+    {
+      "zone": "example.com",
+      "name": "www",
+      "type": "A",
+      "oldIp": "192.168.10.10",
+      "targetIp": "192.168.10.20"
+    }
+  ]
+}

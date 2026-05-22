@@ -1,0 +1,33 @@
+# AI 编辑器配置
+.claude/
+.trae/
+.cursor/
+.copilot/
+.aider*
+.codeium/
+.tabnine/
+.codex/
+.supermaven/
+.windsurf/
+.zed/
+continue/
+.github/copilot/
+.codex-cache/
+AGENTS.md
+CLAUDE.md
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# Go 编译产物
+*.exe
+*.so
+*.dylib
+
+# Go 测试
+*.test
+*.out
+
+# 文档文件
+优化.md

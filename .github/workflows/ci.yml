@@ -1,0 +1,115 @@
+name: CI/CD
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows package
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run tests
+        shell: pwsh
+        run: go test ./...
+
+      - name: Build Windows AMD64 package
+        id: package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          $distDir = Join-Path $PWD "dist"
+          $packageDir = Join-Path $distDir "WinDnsSyncAgent_${version}_windows_amd64"
+          $archiveName = "WinDnsSyncAgent_${version}_windows_amd64.zip"
+          $archivePath = Join-Path $distDir $archiveName
+
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+
+          $env:GOOS = "windows"
+          $env:GOARCH = "amd64"
+          $env:CGO_ENABLED = "0"
+          go build -ldflags="-s -w" -o (Join-Path $packageDir "windnssyncagent.exe") ./cmd/windnssyncagent
+
+          Copy-Item -Path "agent.ps1", "agent.cmd", "sync.ps1", "sync.cmd", "README.md" -Destination $packageDir
+          Copy-Item -Path "config" -Destination $packageDir -Recurse
+          Copy-Item -Path "legacy" -Destination $packageDir -Recurse
+
+          Compress-Archive -Path (Join-Path $packageDir "*") -DestinationPath $archivePath -Force
+
+          $hash = Get-FileHash -Algorithm SHA256 -Path $archivePath
+          "{0}  {1}" -f $hash.Hash.ToLowerInvariant(), $archiveName | Set-Content -Path (Join-Path $distDir "checksums.txt") -Encoding ascii
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "archive_name=$archiveName" >> $env:GITHUB_OUTPUT
+
+      - name: Generate release notes
+        id: changelog
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $version = "${{ steps.package.outputs.version }}"
+          $prevTag = git describe --tags --abbrev=0 "HEAD^" 2>$null
+          if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($prevTag)) {
+            $commits = git log "$prevTag..HEAD" --pretty=format:"- %s (%h)" --no-merges
+          } else {
+            $commits = git log --pretty=format:"- %s (%h)" --no-merges -10
+          }
+
+          if ([string]::IsNullOrWhiteSpace($commits)) {
+            $commits = "- No commit changes found"
+          }
+
+          $isPrerelease = if ($version -match "alpha|beta|rc|pre") { "true" } else { "false" }
+          $buildTime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+          $shortSha = "${{ github.sha }}".Substring(0, 7)
+          $archiveName = "${{ steps.package.outputs.archive_name }}"
+
+          @"
+          ## WinDnsSyncAgent v$version release
+
+          ### Build information
+          - Version: v$version
+          - Commit: $shortSha
+          - Build time: $buildTime
+
+          ### Changes
+          $commits
+
+          ### Windows package
+          - Windows AMD64: ``$archiveName``
+
+          ### Checksums
+          Download ``checksums.txt`` to verify package integrity.
+          "@ | Set-Content -Path "release_notes.md" -Encoding utf8
+
+          "is_prerelease=$isPrerelease" >> $env:GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release_notes.md
+          draft: false
+          prerelease: ${{ steps.changelog.outputs.is_prerelease == 'true' }}
+          generate_release_notes: false
+          files: |
+            dist/*.zip
+            dist/checksums.txt
