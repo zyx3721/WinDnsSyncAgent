@@ -341,7 +341,7 @@ Legacy Agent 提供与 Go Agent 基本一致的接口：
 2008/2008 R2 服务器需要：
 
 - 已安装 DNS Server 角色。
-- PowerShell 可用，建议 PowerShell 2.0+。
+- PowerShell 可用，建议 PowerShell 2.0+。Windows Server 2008 SP2 如果仍是 PowerShell 1.0，请先安装 Windows Management Framework Core 2.0（`Windows6.0-KB968930-x64.msu`），详见 10.9。
 - 当前账号可以读取 `root\MicrosoftDNS` WMI 命名空间。
 - 如果需要写操作，当前账号需要 DNS 管理权限，并且系统能找到 `dnscmd.exe`。
 - 如果 2008/2008 R2 作为目标端接收写入请求，需要可加载 `.NET Framework` 的 `System.Web.Extensions` 程序集，用于解析批量写入接口的 JSON 请求体。多数 2008 R2 环境可通过启用/安装 .NET Framework 3.5.1 或 4.x 满足，详见 [10.8](#108-2008-目标端报-json-request-body-parsing-requires-net-systemwebextensions-怎么办)。
@@ -785,7 +785,7 @@ Windows Server 2008/2008 R2 不使用该模块，Legacy Agent 使用 WMI 读取 
 
 如果目标端存在源端没有的记录，`mirror` 模式会尝试删除；但 `SOA` 和 Zone 根节点 `NS` 记录不参与同步，不会被新增、更新或删除。非根节点 `NS` 委派记录会参与同步。若不希望删除目标端已有记录，请使用 `addOnly`。
 
-## 10.5 同步时报 zone example.com not found on source 怎么办？
+## 10.5 同步时报 `zone example.com not found on source` 怎么办？
 
 这是因为 `config/sync.json` 示例里默认写了：
 
@@ -807,7 +807,7 @@ Windows Server 2008/2008 R2 不使用该模块，Legacy Agent 使用 WMI 读取 
 
 注意：`dryRun=true` 也会真实读取源端 Zone，所以源端不存在的 Zone 仍然会报错。
 
-## 10.6 执行脚本时报 “无法将 param 项识别为 cmdlet” 怎么办？
+## 10.6 执行脚本时报 `无法将 param 项识别为 cmdlet` 怎么办？
 
 请确认服务器上的 `agent.ps1` 和 `sync.ps1` 是最新版本。新版脚本已经移除了 `param(...)` 参数块，兼容 Windows Server 2008 / PowerShell 2.0。
 
@@ -831,7 +831,7 @@ config\sync.json
 .\sync.ps1
 ```
 
-## 10.7 执行脚本时报“因为在此系统中禁止执行脚本”怎么办？
+## 10.7 执行脚本时报 `因为在此系统中禁止执行脚本` 怎么办？
 
 这是 PowerShell 执行策略拦截了 `.ps1` 脚本，不是 WinDnsSyncAgent 本身报错。
 
@@ -859,7 +859,7 @@ Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
 Get-ExecutionPolicy -List
 ```
 
-## 10.8 2008 目标端报 JSON request body parsing requires .NET System.Web.Extensions 怎么办？
+## 10.8 2008 目标端报 `JSON request body parsing requires .NET System.Web.Extensions` 怎么办？
 
 这个错误只针对 Windows Server 2008/2008 R2 Legacy Agent 作为目标端接收写入请求的场景，例如：
 
@@ -895,6 +895,50 @@ agent.cmd -LegacySource
 
 或使用当前部署方式重新启动 `legacy/source-agent.ps1`。如果仍然报错，请确认正在运行的是更新后的 Legacy Agent 脚本，并检查服务器是否需要重启后才能加载新安装的 .NET 组件。
 
+## 10.9 Windows Server 2008 SP2 运行脚本时报 `-ExecutionPolicy` 或 `-File` 参数错误怎么办？
+
+如果在 Windows Server 2008 SP2 上执行 `agent.cmd` 或手动运行 PowerShell 命令时出现类似错误：
+
+```text
+一元运算符“-”后缺少表达式。
+所在位置 行:1 字符: 2
++ -E <<<< xecutionPolicy Bypass -File .\agent.ps1
+```
+
+通常说明当前系统仍是 PowerShell 1.0，无法正确支持本项目启动脚本使用的 `-ExecutionPolicy`、`-File` 等参数。请先安装 Windows Management Framework Core 2.0，将 PowerShell 升级到 2.0。
+
+Windows Server 2008 SP2 x64 对应安装包为：
+
+```text
+Windows6.0-KB968930-x64.msu
+```
+
+安装方式示例：
+
+```cmd
+wusa.exe Windows6.0-KB968930-x64.msu
+```
+
+安装完成后建议重启服务器，然后检查 PowerShell 版本：
+
+```cmd
+powershell.exe -NoProfile -Command "$PSVersionTable.PSVersion"
+```
+
+如果 `$PSVersionTable` 没有输出，也可以检查 Host 版本：
+
+```cmd
+powershell.exe -NoProfile -Command "$host.Version"
+```
+
+确认 PowerShell 已升级到 2.0 后，再重新启动 Legacy Agent：
+
+```cmd
+agent.cmd -LegacySource
+```
+
+该补丁主要针对 Windows Server 2008 SP2 / PowerShell 1.0 环境。Windows Server 2008 R2 通常已内置 PowerShell 2.0，一般不需要安装 `Windows6.0-KB968930-x64.msu`。
+
 # 十一、开发与构建
 
 ## 11.1 测试
@@ -911,11 +955,10 @@ go build -o windnssyncagent.exe ./cmd/windnssyncagent
 
 # 十二、版本历史
 
-| 版本 | 发布日期 | 类型 | 说明 |
-| :-: | :-: | :-: | :- |
-| `v1.0.0` | 2026-05-22 | 首个正式版本 | 完成 Go Agent、2008/2008 R2 Legacy Agent、DNS Zone/Record 同步、子级域目录同步、委派 NS 同步、include/exclude 选择规则、dryRun、rewrite 和发布包构建流程。 |
+## v1.0.0 - 2026-5-22
 
-详细更新日志请查看：[verchanglog/v1.0.0.md](verchanglog/v1.0.0.md)。
+- 首个正式版本，完成 Go Agent、2008/2008 R2 Legacy Agent、DNS Zone/Record 同步、子级域目录同步、委派 NS 同步、include/exclude 选择规则、dryRun、rewrite 和发布包构建流程。
+- 详细更新日志见 [verchanglog/v1.0.0.md](verchanglog/v1.0.0.md)。
 
 # 十三、许可证
 
