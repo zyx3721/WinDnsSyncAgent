@@ -752,22 +752,23 @@ function Get-LegacyRecordCreatePtr {
 
 function Get-DnsCmdAddArguments {
   param([string]$ZoneName, [string]$Name, [string]$Type, [string]$Value, [string]$WriteName = $null)
-  if ($null -eq $WriteName) { $writeName = Convert-LegacyRecordNameForWrite -Name $Name } else { $writeName = $WriteName }
+  if (Test-BlankString $WriteName) { $nodeName = Convert-LegacyRecordNameForWrite -Name $Name } else { $nodeName = $WriteName }
   switch ($Type) {
-    "A" { return @(".", "/RecordAdd", $ZoneName, $writeName, "A", $Value) }
-    "AAAA" { return @(".", "/RecordAdd", $ZoneName, $writeName, "AAAA", $Value) }
-    "CNAME" { return @(".", "/RecordAdd", $ZoneName, $writeName, "CNAME", $Value) }
-    "PTR" { return @(".", "/RecordAdd", $ZoneName, $writeName, "PTR", $Value) }
-    "TXT" { return @(".", "/RecordAdd", $ZoneName, $writeName, "TXT", $Value) }
+    "A" { return @(".", "/RecordAdd", $ZoneName, $nodeName, "A", $Value) }
+    "AAAA" { return @(".", "/RecordAdd", $ZoneName, $nodeName, "AAAA", $Value) }
+    "CNAME" { return @(".", "/RecordAdd", $ZoneName, $nodeName, "CNAME", $Value) }
+    "PTR" { return @(".", "/RecordAdd", $ZoneName, $nodeName, "PTR", $Value) }
+    "TXT" { return @(".", "/RecordAdd", $ZoneName, $nodeName, "TXT", $Value) }
+    "NS" { return @(".", "/RecordAdd", $ZoneName, $nodeName, "NS", $Value) }
     "MX" {
       $parts = $Value -split "\s+", 2
       if ($parts.Count -lt 2) { throw "MX value format: preference mail.example.com" }
-      return @(".", "/RecordAdd", $ZoneName, $writeName, "MX", $parts[0], $parts[1])
+      return @(".", "/RecordAdd", $ZoneName, $nodeName, "MX", $parts[0], $parts[1])
     }
     "SRV" {
       $parts = $Value -split "\s+", 4
       if ($parts.Count -lt 4) { throw "SRV value format: priority weight port target" }
-      return @(".", "/RecordAdd", $ZoneName, $writeName, "SRV", $parts[0], $parts[1], $parts[2], $parts[3])
+      return @(".", "/RecordAdd", $ZoneName, $nodeName, "SRV", $parts[0], $parts[1], $parts[2], $parts[3])
     }
     default { throw "Unsupported record type: $Type" }
   }
@@ -775,22 +776,23 @@ function Get-DnsCmdAddArguments {
 
 function Get-DnsCmdDeleteArguments {
   param([string]$ZoneName, [string]$Name, [string]$Type, [string]$Value, [string]$WriteName = $null)
-  if ($null -eq $WriteName) { $writeName = Convert-LegacyRecordNameForWrite -Name $Name } else { $writeName = $WriteName }
+  if (Test-BlankString $WriteName) { $nodeName = Convert-LegacyRecordNameForWrite -Name $Name } else { $nodeName = $WriteName }
   switch ($Type) {
-    "A" { return @(".", "/RecordDelete", $ZoneName, $writeName, "A", $Value, "/f") }
-    "AAAA" { return @(".", "/RecordDelete", $ZoneName, $writeName, "AAAA", $Value, "/f") }
-    "CNAME" { return @(".", "/RecordDelete", $ZoneName, $writeName, "CNAME", $Value, "/f") }
-    "PTR" { return @(".", "/RecordDelete", $ZoneName, $writeName, "PTR", $Value, "/f") }
-    "TXT" { return @(".", "/RecordDelete", $ZoneName, $writeName, "TXT", $Value, "/f") }
+    "A" { return @(".", "/RecordDelete", $ZoneName, $nodeName, "A", $Value, "/f") }
+    "AAAA" { return @(".", "/RecordDelete", $ZoneName, $nodeName, "AAAA", $Value, "/f") }
+    "CNAME" { return @(".", "/RecordDelete", $ZoneName, $nodeName, "CNAME", $Value, "/f") }
+    "PTR" { return @(".", "/RecordDelete", $ZoneName, $nodeName, "PTR", $Value, "/f") }
+    "TXT" { return @(".", "/RecordDelete", $ZoneName, $nodeName, "TXT", $Value, "/f") }
+    "NS" { return @(".", "/RecordDelete", $ZoneName, $nodeName, "NS", $Value, "/f") }
     "MX" {
       $parts = $Value -split "\s+", 2
       if ($parts.Count -lt 2) { throw "MX value format: preference mail.example.com" }
-      return @(".", "/RecordDelete", $ZoneName, $writeName, "MX", $parts[0], $parts[1], "/f")
+      return @(".", "/RecordDelete", $ZoneName, $nodeName, "MX", $parts[0], $parts[1], "/f")
     }
     "SRV" {
       $parts = $Value -split "\s+", 4
       if ($parts.Count -lt 4) { throw "SRV value format: priority weight port target" }
-      return @(".", "/RecordDelete", $ZoneName, $writeName, "SRV", $parts[0], $parts[1], $parts[2], $parts[3], "/f")
+      return @(".", "/RecordDelete", $ZoneName, $nodeName, "SRV", $parts[0], $parts[1], $parts[2], $parts[3], "/f")
     }
     default { throw "Unsupported record type: $Type" }
   }
