@@ -344,7 +344,7 @@ Legacy Agent 提供与 Go Agent 基本一致的接口：
 - PowerShell 可用，建议 PowerShell 2.0+。
 - 当前账号可以读取 `root\MicrosoftDNS` WMI 命名空间。
 - 如果需要写操作，当前账号需要 DNS 管理权限，并且系统能找到 `dnscmd.exe`。
-- 如果需要接收写接口的 JSON 请求体，需要可加载 `.NET Framework` 的 `System.Web.Extensions` 程序集。多数 2008 R2 环境可通过启用/安装 .NET Framework 3.5 或 4.x 满足。
+- 如果 2008/2008 R2 作为目标端接收写入请求，需要可加载 `.NET Framework` 的 `System.Web.Extensions` 程序集，用于解析批量写入接口的 JSON 请求体。多数 2008 R2 环境可通过启用/安装 .NET Framework 3.5.1 或 4.x 满足，详见 [10.8](#108-2008-目标端报-json-request-body-parsing-requires-net-systemwebextensions-怎么办)。
 - 防火墙放通 Agent 端口。
 
 检查 WMI：
@@ -858,6 +858,42 @@ Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```powershell
 Get-ExecutionPolicy -List
 ```
+
+## 10.8 2008 目标端报 JSON request body parsing requires .NET System.Web.Extensions 怎么办？
+
+这个错误只针对 Windows Server 2008/2008 R2 Legacy Agent 作为目标端接收写入请求的场景，例如：
+
+```text
+POST /dns/zones/google.com/records/batch failed: JSON request body parsing requires .NET System.Web.Extensions. Install/enable .NET Framework 3.5/4.x on this server.
+```
+
+原因是目标端 2008 Legacy Agent 需要使用 `.NET System.Web.Extensions` 解析批量写入接口的 JSON 请求体，但当前服务器没有启用或安装对应 .NET 组件。2012+ 中转机和标准 Go Agent 不需要处理这个问题。
+
+先在目标 2008/2008 R2 上检查组件是否可加载：
+
+```powershell
+[Reflection.Assembly]::LoadWithPartialName("System.Web.Extensions")
+```
+
+如果返回为空或报错，请在目标 2008/2008 R2 上启用 .NET Framework 3.5.1 功能。常见命令如下：
+
+```cmd
+servermanagercmd -install NET-Framework-Core
+```
+
+也可以通过图形界面启用：
+
+```text
+服务器管理器 -> 功能 -> 添加功能 -> .NET Framework 3.5.1 功能
+```
+
+如果环境无法启用 3.5.1，安装 .NET Framework 4.x 也可以满足 `System.Web.Extensions` 依赖。安装完成后重新执行检查命令，确认能返回程序集信息，然后重启目标端 Legacy Agent：
+
+```cmd
+agent.cmd -LegacySource
+```
+
+或使用当前部署方式重新启动 `legacy/source-agent.ps1`。如果仍然报错，请确认正在运行的是更新后的 Legacy Agent 脚本，并检查服务器是否需要重启后才能加载新安装的 .NET 组件。
 
 # 十一、开发与构建
 

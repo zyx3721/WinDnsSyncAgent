@@ -24,6 +24,7 @@ Thumbs.db
 *.exe
 *.so
 *.dylib
+dist/*
 
 # Go 测试
 *.test
