@@ -17,8 +17,9 @@ WinDnsSyncAgent 是一个面向 Windows Server DNS 的轻量同步工具。源 D
 - [九、安全说明](#九安全说明)
 - [十、常见问题](#十常见问题)
 - [十一、开发与构建](#十一开发与构建)
-- [十二、许可证](#十二许可证)
-- [十三、联系方式](#十三联系方式)
+- [十二、版本历史](#十二版本历史)
+- [十三、许可证](#十三许可证)
+- [十四、联系方式](#十四联系方式)
 
 # 一、项目介绍
 
@@ -872,17 +873,25 @@ go test ./...
 go build -o windnssyncagent.exe ./cmd/windnssyncagent
 ```
 
-# 十二、许可证
+# 十二、版本历史
+
+| 版本 | 发布日期 | 类型 | 说明 |
+| :-: | :-: | :-: | :- |
+| `v1.0.0` | 2026-05-22 | 首个正式版本 | 完成 Go Agent、2008/2008 R2 Legacy Agent、DNS Zone/Record 同步、子级域目录同步、委派 NS 同步、include/exclude 选择规则、dryRun、rewrite 和发布包构建流程。 |
+
+详细更新日志请查看：[verchanglog/v1.0.0.md](verchanglog/v1.0.0.md)。
+
+# 十三、许可证
 
 本项目采用 MIT License，详见 [LICENSE](LICENSE)。
 
-# 十三、联系方式
+# 十四、联系方式
 
 如果您在使用过程中遇到问题,或有任何建议和反馈,欢迎通过以下方式联系:
 
 - **Email**: 416685476@qq.com
-- **GitHub Issues**: [https://github.com/zyx3721/picbed-switcher/issues](https://github.com/zyx3721/picbed-switcher/issues)
-- **项目主页**: [https://github.com/zyx3721/picbed-switcher](https://github.com/zyx3721/picbed-switcher)
+- **GitHub Issues**: [https://github.com/zyx3721/WinDnsSyncAgent/issues](https://github.com/zyx3721/WinDnsSyncAgent/issues)
+- **项目主页**: [https://github.com/zyx3721/WinDnsSyncAgent](https://github.com/zyx3721/WinDnsSyncAgent)
 
 ---
 
