@@ -7,10 +7,13 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"windnssyncagent/internal/config"
 	"windnssyncagent/internal/dns"
 )
+
+const defaultRecordBatchSize = 50
 
 type Result struct {
 	DryRun           bool
@@ -38,8 +41,9 @@ func Run(ctx context.Context, cfg config.Sync) (Result, error) {
 func RunWithLogger(ctx context.Context, cfg config.Sync, logger Logger) (Result, error) {
 	result := Result{DryRun: cfg.DryRun}
 	logger = synchronizedLogger(logger)
-	source := newClient(cfg.SourceAgent, cfg.SourceAPIKey)
-	target := newClient(cfg.TargetAgent, cfg.TargetAPIKey)
+	requestTimeout := time.Duration(cfg.RequestTimeoutSeconds) * time.Second
+	source := newClient(cfg.SourceAgent, cfg.SourceAPIKey, requestTimeout)
+	target := newClient(cfg.TargetAgent, cfg.TargetAPIKey, requestTimeout)
 
 	if err := source.health(ctx); err != nil {
 		return result, fmt.Errorf("source agent health check failed: %w", err)
@@ -62,10 +66,14 @@ func RunWithLogger(ctx context.Context, cfg config.Sync, logger Logger) (Result,
 	targetZoneMap := zoneMap(targetZones)
 	sourceZoneMap := zoneMap(sourceZones)
 	selectedZoneSet := stringSet(selectedZones)
+	excludedTargetZoneDeletes := targetZoneDeleteExclusionSet(cfg.ExcludeZones, targetZones)
 
 	if cfg.SyncMode == "mirror" {
 		for _, targetZone := range targetZones {
-			if targetZone.Reverse || isSystemZone(targetZone.Name) {
+			if targetZone.Reverse || isSystemZone(targetZone.Name) || !isSyncableZone(targetZone) {
+				continue
+			}
+			if excludedTargetZoneDeletes[normalizedZoneKey(targetZone.Name)] {
 				continue
 			}
 			if len(cfg.IncludeZones) > 0 && !selectedZoneSet[targetZone.Name] {
@@ -74,13 +82,16 @@ func RunWithLogger(ctx context.Context, cfg config.Sync, logger Logger) (Result,
 			if _, exists := sourceZoneMap[targetZone.Name]; exists {
 				continue
 			}
+			if cfg.DryRun {
+				result.ZonesDeleted = append(result.ZonesDeleted, targetZone.Name)
+				addMessage(&result, logger, fmt.Sprintf("delete zone %s", targetZone.Name))
+				continue
+			}
+			if err := target.deleteZone(ctx, targetZone.Name); err != nil {
+				return result, fmt.Errorf("delete target zone %s: %w", targetZone.Name, err)
+			}
 			result.ZonesDeleted = append(result.ZonesDeleted, targetZone.Name)
 			addMessage(&result, logger, fmt.Sprintf("delete zone %s", targetZone.Name))
-			if !cfg.DryRun {
-				if err := target.deleteZone(ctx, targetZone.Name); err != nil {
-					return result, fmt.Errorf("delete target zone %s: %w", targetZone.Name, err)
-				}
-			}
 		}
 	}
 
@@ -163,14 +174,20 @@ func syncZone(ctx context.Context, cfg config.Sync, source, target client, selec
 	if !ok {
 		return result, fmt.Errorf("zone %s not found on source", zoneName)
 	}
+	if !isSyncableZone(sourceZone) {
+		return result, nil
+	}
 
 	if _, exists := targetZoneMap[zoneName]; !exists {
-		result.ZonesCreated = append(result.ZonesCreated, zoneName)
-		addMessage(&result, logger, fmt.Sprintf("create zone %s", zoneName))
-		if !cfg.DryRun {
+		if cfg.DryRun {
+			result.ZonesCreated = append(result.ZonesCreated, zoneName)
+			addMessage(&result, logger, fmt.Sprintf("create zone %s", zoneName))
+		} else {
 			if err := target.createZone(ctx, sourceZone); err != nil {
 				return result, fmt.Errorf("create target zone %s: %w", zoneName, err)
 			}
+			result.ZonesCreated = append(result.ZonesCreated, zoneName)
+			addMessage(&result, logger, fmt.Sprintf("create zone %s", zoneName))
 		}
 	}
 
@@ -188,28 +205,74 @@ func syncZone(ctx context.Context, cfg config.Sync, source, target client, selec
 	targetRecords = filterRecordsBySelection(targetRecords, selection)
 
 	adds, deletes, updates := diffRecords(zoneName, sourceRecords, targetRecords, cfg.SyncMode)
-	for _, record := range adds {
-		record = withCreatePTR(record, cfg.CreatePTR)
-		result.RecordsAdded = append(result.RecordsAdded, record)
-		addMessage(&result, logger, fmt.Sprintf("add %s %s %s %s ttl=%d", zoneName, record.Type, record.Name, record.Value, normalizedTTL(record.TTL)))
+	for i := range adds {
+		adds[i] = withCreatePTR(adds[i], cfg.CreatePTR)
 	}
 	for i := range updates {
 		updates[i].New = withCreatePTR(updates[i].New, cfg.CreatePTR)
-		result.RecordsUpdated = append(result.RecordsUpdated, updates[i])
-		addMessage(&result, logger, fmt.Sprintf("update %s %s %s %s -> %s ttl=%d", zoneName, updates[i].New.Type, updates[i].New.Name, updates[i].Old.Value, updates[i].New.Value, normalizedTTL(updates[i].New.TTL)))
-	}
-	for _, record := range deletes {
-		result.RecordsDeleted = append(result.RecordsDeleted, record)
-		addMessage(&result, logger, fmt.Sprintf("delete %s %s %s %s", zoneName, record.Type, record.Name, record.Value))
 	}
 
-	if !cfg.DryRun && (len(adds) > 0 || len(deletes) > 0 || len(updates) > 0) {
-		batch := dns.RecordBatch{Add: adds, Delete: deletes, Update: updates}
-		if err := target.applyRecordBatch(ctx, zoneName, batch); err != nil {
-			return result, fmt.Errorf("apply record batch for %s: %w", zoneName, err)
+	if cfg.DryRun {
+		addPlannedRecordMessages(&result, logger, zoneName, adds, deletes, updates)
+		return result, nil
+	}
+	recordBatchSize := cfg.RecordBatchSize
+	if recordBatchSize <= 0 {
+		recordBatchSize = defaultRecordBatchSize
+	}
+
+	for start := 0; start < len(updates); start += recordBatchSize {
+		end := min(start+recordBatchSize, len(updates))
+		batchUpdates := updates[start:end]
+		addPlannedRecordMessages(&result, logger, zoneName, nil, nil, batchUpdates)
+		if err := target.applyRecordBatch(ctx, zoneName, dns.RecordBatch{Update: batchUpdates}); err != nil {
+			return result, fmt.Errorf("update record batch for %s: %w", zoneName, err)
+		}
+	}
+	for start := 0; start < len(adds); start += recordBatchSize {
+		end := min(start+recordBatchSize, len(adds))
+		batchAdds := adds[start:end]
+		addPlannedRecordMessages(&result, logger, zoneName, batchAdds, nil, nil)
+		if err := target.applyRecordBatch(ctx, zoneName, dns.RecordBatch{Add: batchAdds}); err != nil {
+			return result, fmt.Errorf("add record batch for %s: %w", zoneName, err)
+		}
+	}
+	for start := 0; start < len(deletes); start += recordBatchSize {
+		end := min(start+recordBatchSize, len(deletes))
+		batchDeletes := deletes[start:end]
+		addPlannedRecordMessages(&result, logger, zoneName, nil, batchDeletes, nil)
+		if err := target.applyRecordBatch(ctx, zoneName, dns.RecordBatch{Delete: batchDeletes}); err != nil {
+			return result, fmt.Errorf("delete record batch for %s: %w", zoneName, err)
 		}
 	}
 	return result, nil
+}
+
+func addPlannedRecordMessages(result *Result, logger Logger, zoneName string, adds, deletes []dns.Record, updates []dns.RecordUpdate) {
+	for _, record := range adds {
+		result.RecordsAdded = append(result.RecordsAdded, record)
+		addMessage(result, logger, addRecordMessage(zoneName, record))
+	}
+	for _, update := range updates {
+		result.RecordsUpdated = append(result.RecordsUpdated, update)
+		addMessage(result, logger, updateRecordMessage(zoneName, update))
+	}
+	for _, record := range deletes {
+		result.RecordsDeleted = append(result.RecordsDeleted, record)
+		addMessage(result, logger, deleteRecordMessage(zoneName, record))
+	}
+}
+
+func addRecordMessage(zoneName string, record dns.Record) string {
+	return fmt.Sprintf("add %s %s %s %s ttl=%d", zoneName, record.Type, record.Name, record.Value, normalizedTTL(record.TTL))
+}
+
+func updateRecordMessage(zoneName string, update dns.RecordUpdate) string {
+	return fmt.Sprintf("update %s %s %s %s -> %s ttl=%d", zoneName, update.New.Type, update.New.Name, update.Old.Value, update.New.Value, normalizedTTL(update.New.TTL))
+}
+
+func deleteRecordMessage(zoneName string, record dns.Record) string {
+	return fmt.Sprintf("delete %s %s %s %s", zoneName, record.Type, record.Name, record.Value)
 }
 
 func addMessage(result *Result, logger Logger, message string) {
@@ -272,7 +335,7 @@ func selectZoneSelections(includeConfigured, excludeConfigured []string, sourceZ
 
 	selections := make([]zoneSelection, 0, len(sourceZones))
 	for _, zone := range sourceZones {
-		if zone.Reverse || isSystemZone(zone.Name) {
+		if zone.Reverse || isSystemZone(zone.Name) || !isSyncableZone(zone) {
 			continue
 		}
 		selections = append(selections, zoneSelection{Name: zone.Name})
@@ -387,6 +450,26 @@ func applyExcludeZoneSelections(selections []zoneSelection, configured []string,
 	return dedupeZoneSelections(result)
 }
 
+func targetZoneDeleteExclusionSet(configured []string, targetZones []dns.Zone) map[string]bool {
+	result := make(map[string]bool)
+	if len(configured) == 0 {
+		return result
+	}
+	for _, value := range configured {
+		selection := resolveZoneSelection(value, targetZones)
+		if selection.Name == "" {
+			selection.Name = strings.TrimSpace(value)
+		}
+		if normalizeNodeName(selection.Subtree) != "@" {
+			continue
+		}
+		if key := normalizedZoneKey(selection.Name); key != "" {
+			result[key] = true
+		}
+	}
+	return result
+}
+
 func subtractExcludedSelections(selection zoneSelection, excludes []zoneSelection) []zoneSelection {
 	parts := []zoneSelection{selection}
 	for _, exclude := range excludes {
@@ -452,8 +535,25 @@ func stringSet(values []string) map[string]bool {
 	return result
 }
 
+func normalizedZoneKey(value string) string {
+	return strings.ToLower(strings.Trim(strings.TrimSpace(value), "."))
+}
+
 func isSystemZone(name string) bool {
 	return strings.EqualFold(strings.TrimSpace(name), "TrustAnchors")
+}
+
+func isSyncableZone(zone dns.Zone) bool {
+	typeName := strings.ToLower(strings.TrimSpace(zone.Type))
+	if typeName == "" {
+		return true
+	}
+	switch typeName {
+	case "primary", "secondary", "stub":
+		return true
+	default:
+		return false
+	}
 }
 
 func diffRecords(zone string, sourceRecords, targetRecords []dns.Record, mode string) ([]dns.Record, []dns.Record, []dns.RecordUpdate) {

@@ -29,11 +29,14 @@ type responseEnvelope[T any] struct {
 	} `json:"error"`
 }
 
-func newClient(baseURL, apiKey string) client {
+func newClient(baseURL, apiKey string, timeout time.Duration) client {
+	if timeout <= 0 {
+		timeout = 90 * time.Second
+	}
 	return client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
-		http:    &http.Client{Timeout: 90 * time.Second},
+		http:    &http.Client{Timeout: timeout},
 	}
 }
 

@@ -2,7 +2,6 @@ $ErrorActionPreference = "Stop"
 
 $Config = ""
 $LegacySource = $false
-$NoPause = $false
 
 for ($i = 0; $i -lt $args.Count; $i++) {
   $arg = [string]$args[$i]
@@ -18,20 +17,11 @@ for ($i = 0; $i -lt $args.Count; $i++) {
       continue
     }
     "^-NoPause$" {
-      $NoPause = $true
       continue
     }
     default {
       throw "Unknown argument: $arg"
     }
-  }
-}
-
-function Pause-IfNeeded {
-  param([bool]$Skip)
-  if (-not $Skip) {
-    Write-Host ""
-    [void](Read-Host "Press Enter to exit")
   }
 }
 
@@ -85,6 +75,5 @@ try {
 }
 catch {
   Write-Host "Start agent failed: $($_.Exception.Message)" -ForegroundColor Red
-  Pause-IfNeeded -Skip:$NoPause
   exit 1
 }

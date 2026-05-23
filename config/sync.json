@@ -7,6 +7,8 @@
   ],
   "excludeZones": [],
   "zoneConcurrency": 2,
+  "recordBatchSize": 50,
+  "requestTimeoutSeconds": 90,
   "syncMode": "mirror",
   "dryRun": true,
   "createPtrRecords": false,

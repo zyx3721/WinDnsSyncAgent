@@ -27,6 +27,8 @@ type Sync struct {
 	ExcludeZones    []string        `json:"excludeZones"`
 	Zones           []string        `json:"zones,omitempty"`
 	ZoneConcurrency int             `json:"zoneConcurrency"`
+	RecordBatchSize int             `json:"recordBatchSize"`
+	RequestTimeoutSeconds int       `json:"requestTimeoutSeconds"`
 	SyncMode        string          `json:"syncMode"`
 	DryRun          bool            `json:"dryRun"`
 	CreatePTR       bool            `json:"createPtrRecords"`
@@ -92,6 +94,18 @@ func LoadSync(path string) (Sync, error) {
 	}
 	if cfg.ZoneConcurrency > 16 {
 		return cfg, fmt.Errorf("zoneConcurrency must be between 1 and 16")
+	}
+	if cfg.RecordBatchSize <= 0 {
+		cfg.RecordBatchSize = 50
+	}
+	if cfg.RecordBatchSize > 500 {
+		return cfg, fmt.Errorf("recordBatchSize must be between 1 and 500")
+	}
+	if cfg.RequestTimeoutSeconds <= 0 {
+		cfg.RequestTimeoutSeconds = 90
+	}
+	if cfg.RequestTimeoutSeconds > 3600 {
+		return cfg, fmt.Errorf("requestTimeoutSeconds must be between 1 and 3600")
 	}
 	if len(cfg.IncludeZones) == 0 && len(cfg.Zones) > 0 {
 		cfg.IncludeZones = cfg.Zones

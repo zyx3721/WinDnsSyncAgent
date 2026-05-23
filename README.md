@@ -281,6 +281,8 @@ Go Agent 和 Windows Server 2008 Legacy Agent 都读取这份 `agent.json`。
   "includeZones": ["example.com"],
   "excludeZones": [],
   "zoneConcurrency": 2,
+  "recordBatchSize": 50,
+  "requestTimeoutSeconds": 90,
   "syncMode": "mirror",
   "dryRun": true,
   "createPtrRecords": false,
@@ -305,8 +307,10 @@ Go Agent 和 Windows Server 2008 Legacy Agent 都读取这份 `agent.json`。
 | `sourceApiKey` | string | 源 Agent 单独 API Key。未配置时使用 `apiKey`。 |
 | `targetApiKey` | string | 目标 Agent 单独 API Key。未配置时使用 `apiKey`。 |
 | `includeZones` | string[] | 要同步的 Zone 或 Zone 下的子级域目录。为空时默认同步源端全部正向业务区域，不自动同步反向区域，并跳过 `TrustAnchors` 等系统区域。显式配置 `test.cursor.com` 且源端存在 `cursor.com` Zone 时，会只同步 `cursor.com` 下的 `test` 节点及其子节点记录。旧配置字段 `zones` 仍可兼容读取，但建议迁移到 `includeZones`。 |
-| `excludeZones` | string[] | 要排除的 Zone 或 Zone 下的子级域目录。默认为空数组，表示不排除任何区域。显式配置 `test.cursor.com` 且源端存在 `cursor.com` Zone 时，会排除 `cursor.com` 下的 `test` 节点及其子节点记录。 |
+| `excludeZones` | string[] | 要排除的 Zone 或 Zone 下的子级域目录。默认为空数组，表示不排除任何区域。显式配置 `test.cursor.com` 且源端存在 `cursor.com` Zone 时，会排除 `cursor.com` 下的 `test` 节点及其子节点记录；若目标端存在独立的 `test.cursor.com` Zone，即使源端不存在该 Zone，`mirror` 模式也不会删除该目标 Zone。 |
 | `zoneConcurrency` | number | Zone 级并发数。默认 `2`，建议生产使用 `2` 到 `4`，最大允许 `16`。 |
+| `recordBatchSize` | number | 每次提交给目标 Agent 的记录数量。默认 `50`，最大允许 `500`。目标端为 Windows Server 2008/2008 R2 Legacy Agent 时建议配置为 `5` 到 `10`；目标端为 Windows Server 2012+ Go Agent 时可使用默认值或按性能调大。 |
+| `requestTimeoutSeconds` | number | 同步端等待源/目标 Agent 单次 HTTP 请求响应的超时时间。默认 `90` 秒，最大允许 `3600` 秒。目标端为 Windows Server 2008/2008 R2 Legacy Agent 且批量写入较慢时，可配置为 `300` 或 `600`。 |
 | `syncMode` | string | `mirror` 或 `addOnly`。 |
 | `dryRun` | bool | `true` 只预览写入动作，`false` 才真正修改目标 DNS。无论是否 dry-run，都会真实连接源/目标并读取数据。 |
 | `createPtrRecords` | bool | 新增 A 记录时是否尝试创建关联 PTR 指针记录，类似 DNS 控制台里的“更新关联的指针记录”。默认 `false`。 |
@@ -546,7 +550,7 @@ zone + type + name + value
 
 TTL 不参与是否同一条记录的判断。新增记录时使用源端 TTL；缺省为 `3600`。
 
-## 7.1.1 dryRun 的作用
+### 7.1.1 dryRun 的作用
 
 `dryRun=true` 表示只生成执行计划，不真正修改目标 DNS。它会执行以下动作：
 
@@ -575,7 +579,7 @@ zone example.com not found on source
 "includeZones": []
 ```
 
-`includeZones` 为空时，程序默认只同步源端正向查找区域，不会自动同步反向查找区域，并且会跳过 `TrustAnchors` 这类 Windows DNS 系统区域。如果确实要同步某个反向 Zone，需要显式写入：
+`includeZones` 为空时，程序默认只同步源端正向查找区域，不会自动同步反向查找区域，并且会跳过 `TrustAnchors` 这类 Windows DNS 系统区域。条件转发器不属于普通业务解析 Zone，不参与同步，也不会在目标端创建为正向查找区域。如果确实要同步某个反向 Zone，需要显式写入：
 
 ```json
 "includeZones": [
@@ -592,9 +596,11 @@ zone example.com not found on source
 ]
 ```
 
+`excludeZones` 会同时用于保护目标端独有 Zone。比如目标端存在独立的 `test.cursor.com` Zone，而源端不存在该 Zone 时，配置上述排除项后，`mirror` 模式不会删除目标端的 `test.cursor.com` Zone。如果目标端只有 `cursor.com` Zone，则该配置仍按子级域目录处理，只排除 `cursor.com` 下的 `test` 节点及其子节点记录。
+
 不建议同步 `TrustAnchors`。它是 DNSSEC 信任锚相关的系统区域，不属于普通业务解析区域。
 
-## 7.1.2 更新关联 PTR 指针记录
+### 7.1.2 更新关联 PTR 指针记录
 
 如果希望同步正向 A 记录时，像 Windows DNS 控制台里的“更新关联的指针记录”一样尝试创建 PTR，可以开启：
 
@@ -615,7 +621,7 @@ zone example.com not found on source
 ## 7.2 mirror 模式
 
 - 源有 Zone、目标没有：在目标创建 Zone。
-- 目标有 Zone、源没有：从目标删除 Zone。反向区域和 `TrustAnchors` 等系统区域会跳过。
+- 目标有 Zone、源没有：从目标删除 Zone。反向区域、`TrustAnchors` 等系统区域，以及命中 `excludeZones` 的目标端独有 Zone 会跳过。
 - 源有、目标没有：新增到目标。
 - 同名同类型的单条 `A` / `AAAA` 记录 IP 不同：优先执行更新。
 - 目标有、源没有：从目标删除。
@@ -631,15 +637,15 @@ zone example.com not found on source
 
 创建 Zone 时，目标 Agent 会统一创建可写的 Primary Zone。即使源端 Zone 被识别为 Secondary、Stub 或旧系统 WMI 返回数字类型，目标端也会按 Primary Zone 创建。Go Agent 会优先尝试创建 AD 集成 Primary Zone，并使用 `ReplicationScope=Domain`；如果目标服务器不支持或不适用 AD 集成，会回退为文件型 Primary Zone。Legacy Agent 会使用 `dnscmd.exe /ZoneAdd <zone> /Primary` 创建。
 
-## 7.3.1 批量写入与更新
+### 7.3.1 批量写入与更新
 
-同步程序会按 Zone 汇总新增、更新和删除操作，然后调用目标 Agent 的批量接口：
+同步程序会先按 Zone 计算新增、更新和删除操作。`dryRun=true` 时只输出完整计划，不会写入目标端；`dryRun=false` 时会按 `recordBatchSize` 配置分批处理，每批先输出该批计划日志，再提交给目标 Agent：
 
 ```text
 POST /dns/zones/{zone}/records/batch
 ```
 
-这样目标 Agent 每个 Zone 只需要启动一次 PowerShell，避免每条记录都启动一次 PowerShell，速度会比逐条处理快很多。Go Agent 执行 PowerShell 时会先写入临时 `.ps1` 文件再通过 `-File` 运行，避免大量记录批量写入时触发 Windows 命令行长度限制。
+每次提交仍使用目标 Agent 的批量接口，单批规模由 `recordBatchSize` 控制，默认 `50`。这样可以减少超大批次触发 HTTP 超时的概率。`requestTimeoutSeconds` 针对每一次 HTTP 请求单独计时，包括每一批记录写入；它不是整个同步任务的总超时时间。目标端为 Windows Server 2008/2008 R2 Legacy Agent 时建议配置为 `5` 到 `10`，并按需把 `requestTimeoutSeconds` 调整为 `300` 或 `600`；目标端为 Windows Server 2012+ Go Agent 时可使用默认值或按性能调大。Go Agent 执行 PowerShell 时会先写入临时 `.ps1` 文件再通过 `-File` 运行，避免记录内容较长时触发 Windows 命令行长度限制。
 
 对于同一个 Zone 中同名同类型的单条 `A` / `AAAA` 记录，如果只是 IP 不同且当前为 `mirror` 模式，程序会识别为 `update`。Go Agent 会优先使用 `Set-DnsServerResourceRecord` 更新记录，更新失败时回退为删除旧记录再新增新记录；Windows Server 2008/2008 R2 Legacy Agent 没有原生 update 命令，会直接用 `dnscmd.exe` 删除旧记录再新增新记录。对于同名同类型的多 IP 记录，包括名称为 `@` 的“与父文件夹相同”记录，程序会按 `zone + type + name + value` 精确判断，源端缺少的 IP 才新增，目标端多余的 IP 仅在 `mirror` 模式删除。程序内部统一使用 `@` 表示控制台里的“名称为空则使用父域名称”。
 
@@ -649,7 +655,7 @@ Go Agent 写入记录时会规范化记录名：`@`、空名称、`.` 和与 Zon
 
 新增操作也是幂等的：如果目标记录已经存在，会输出 warning 并跳过。某些 Windows DNS 版本可能出现“PowerShell 返回错误但记录实际已经更新成功”的情况，目标 Agent 会二次检查目标记录；如果新记录已经存在，会把这次 update 视为成功，不再回退新增。
 
-## 7.3.2 Zone 级并发
+### 7.3.2 Zone 级并发
 
 同步程序支持按 Zone 并发处理，通过 `zoneConcurrency` 控制同时处理的 Zone 数量：
 
@@ -657,7 +663,7 @@ Go Agent 写入记录时会规范化记录名：`@`、空名称、`.` 和与 Zon
 "zoneConcurrency": 2
 ```
 
-每个 Zone 内部仍然按顺序执行“必要时创建目标 Zone、读源记录、读目标记录、diff、批量写目标”，避免同一个 Zone 内并发写入造成锁冲突。
+每个 Zone 内部仍然按顺序执行“必要时创建目标 Zone、读源记录、读目标记录、diff、分批写目标”，避免同一个 Zone 内并发写入造成锁冲突。
 
 如果目标端缺少多个 Zone，创建 Zone 的动作也会跟随 `zoneConcurrency` 并发执行。例如 `zoneConcurrency=2` 时，最多同时创建 2 个缺失 Zone。
 

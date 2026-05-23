@@ -158,6 +158,17 @@ func TestSelectZonesKeepsExplicitReverseZone(t *testing.T) {
 	}
 }
 
+func TestSelectZonesSkipsConditionalForwarderZones(t *testing.T) {
+	zones := selectZones(nil, []dns.Zone{
+		{Name: "example.com", Type: "Primary"},
+		{Name: "dc.k8s", Type: "Forwarder"},
+		{Name: "sunline.lab", Type: "ConditionalForwarder"},
+	})
+	if len(zones) != 1 || zones[0] != "example.com" {
+		t.Fatalf("expected only syncable zones, got %#v", zones)
+	}
+}
+
 func TestSelectZoneSelectionsResolvesSubtreeUnderZone(t *testing.T) {
 	selections := selectZoneSelections([]string{"test.cursor.com"}, nil, []dns.Zone{{Name: "cursor.com"}})
 	if len(selections) != 1 || selections[0].Name != "cursor.com" || selections[0].Subtree != "test" {
@@ -183,6 +194,20 @@ func TestSelectZoneSelectionsExcludesSubtree(t *testing.T) {
 	selections := selectZoneSelections([]string{"cursor.com"}, []string{"test.cursor.com"}, []dns.Zone{{Name: "cursor.com"}})
 	if len(selections) != 1 || selections[0].Name != "cursor.com" || len(selections[0].ExcludeSubtrees) != 1 || selections[0].ExcludeSubtrees[0] != "test" {
 		t.Fatalf("expected cursor.com with test excluded, got %#v", selections)
+	}
+}
+
+func TestTargetZoneDeleteExclusionSetProtectsTargetOnlyZone(t *testing.T) {
+	excluded := targetZoneDeleteExclusionSet([]string{"test.cursor.com"}, []dns.Zone{{Name: "cursor.com"}, {Name: "test.cursor.com"}})
+	if !excluded[normalizedZoneKey("test.cursor.com")] {
+		t.Fatalf("expected target-only zone to be protected, got %#v", excluded)
+	}
+}
+
+func TestTargetZoneDeleteExclusionSetDoesNotProtectParentForSubtreeExclude(t *testing.T) {
+	excluded := targetZoneDeleteExclusionSet([]string{"test.cursor.com"}, []dns.Zone{{Name: "cursor.com"}})
+	if excluded[normalizedZoneKey("cursor.com")] {
+		t.Fatalf("expected subtree exclusion to avoid protecting parent zone, got %#v", excluded)
 	}
 }
 

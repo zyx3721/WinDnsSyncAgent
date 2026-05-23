@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"windnssyncagent/internal/agent"
 	"windnssyncagent/internal/config"
@@ -67,14 +68,19 @@ func runSync(args []string) {
 	}
 
 	ctx := context.Background()
+	startedAt := time.Now()
+	fmt.Printf("sync started at %s\n", startedAt.Format("2006-01-02 15:04:05"))
 	result, err := syncer.RunWithLogger(ctx, cfg, func(message string) {
 		fmt.Println(message)
 	})
 	if err != nil {
+		finishedAt := time.Now()
+		fmt.Printf("sync finished at %s duration=%s\n", finishedAt.Format("2006-01-02 15:04:05"), finishedAt.Sub(startedAt).Round(time.Second))
 		log.Fatalf("sync failed: %v", err)
 	}
-
 	printSyncResult(result)
+	finishedAt := time.Now()
+	fmt.Printf("sync finished at %s duration=%s\n", finishedAt.Format("2006-01-02 15:04:05"), finishedAt.Sub(startedAt).Round(time.Second))
 }
 
 func printSyncResult(result syncer.Result) {

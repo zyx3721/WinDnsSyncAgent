@@ -21,7 +21,18 @@ func NewPowerShellProvider() *PowerShellProvider {
 func (p *PowerShellProvider) ListZones(ctx context.Context) ([]Zone, error) {
 	script := `
 Import-Module DnsServer -ErrorAction Stop
-$zones = Get-DnsServerZone | Where-Object { $_.ZoneType -in @("Primary", "Secondary", "Stub") }
+$conditionalForwarders = @{}
+try {
+  foreach ($forwarder in @(Get-DnsServerConditionalForwarderZone -ErrorAction SilentlyContinue)) {
+    $forwarderName = [string]$forwarder.Name
+    if ([string]::IsNullOrWhiteSpace($forwarderName)) { $forwarderName = [string]$forwarder.ZoneName }
+    if (-not [string]::IsNullOrWhiteSpace($forwarderName)) { $conditionalForwarders[$forwarderName.ToLowerInvariant()] = $true }
+  }
+} catch {}
+$zones = Get-DnsServerZone | Where-Object {
+  $_.ZoneType -in @("Primary", "Secondary", "Stub") -and
+  -not $conditionalForwarders.ContainsKey(([string]$_.ZoneName).ToLowerInvariant())
+}
 $result = @($zones | ForEach-Object {
   [PSCustomObject]@{
     id = $_.ZoneName

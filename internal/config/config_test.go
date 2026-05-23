@@ -44,6 +44,36 @@ func TestLoadSyncDefaults(t *testing.T) {
 	if cfg.ZoneConcurrency != 2 {
 		t.Fatalf("expected zoneConcurrency default 2, got %d", cfg.ZoneConcurrency)
 	}
+	if cfg.RecordBatchSize != 50 {
+		t.Fatalf("expected recordBatchSize default 50, got %d", cfg.RecordBatchSize)
+	}
+	if cfg.RequestTimeoutSeconds != 90 {
+		t.Fatalf("expected requestTimeoutSeconds default 90, got %d", cfg.RequestTimeoutSeconds)
+	}
+}
+
+func TestLoadSyncBatchAndTimeoutSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sync.json")
+	content := `{
+  "sourceAgent": "http://source:8443/",
+  "targetAgent": "http://target:8443/",
+  "recordBatchSize": 10,
+  "requestTimeoutSeconds": 300
+}`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadSync(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RecordBatchSize != 10 {
+		t.Fatalf("expected recordBatchSize 10, got %d", cfg.RecordBatchSize)
+	}
+	if cfg.RequestTimeoutSeconds != 300 {
+		t.Fatalf("expected requestTimeoutSeconds 300, got %d", cfg.RequestTimeoutSeconds)
+	}
 }
 
 func TestLoadSyncIncludeExcludeZones(t *testing.T) {

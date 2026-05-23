@@ -254,6 +254,12 @@ function Invoke-DnsCmd {
   return $output
 }
 
+function Test-DnsCmdRecordAlreadyExistsError {
+  param([string]$Message)
+  $text = [string]$Message
+  return ($text -match "DNS_ERROR_RECORD_ALREADY_EXISTS") -or ($text -match "\b9711\b") -or ($text -match "0x25EF")
+}
+
 function Test-ZoneExists {
   param([string]$ZoneName)
   if (Test-BlankString $ZoneName) { return $false }
@@ -298,6 +304,13 @@ function Convert-ZoneTypeName {
   }
 }
 
+function Test-SyncableZoneType {
+  param([string]$Type)
+  $typeName = ([string]$Type).Trim().ToLowerInvariant()
+  if (Test-BlankString $typeName) { return $true }
+  return @("primary", "secondary", "stub") -contains $typeName
+}
+
 function Get-ZoneJson {
   $zones = @(Get-WmiObject -Namespace "root\MicrosoftDNS" -Class "MicrosoftDNS_Zone" -ErrorAction Stop)
   $items = New-Object System.Collections.ArrayList
@@ -305,6 +318,7 @@ function Get-ZoneJson {
     $name = [string]$zone.Name
     if (Test-BlankString $name) { continue }
     $type = Convert-ZoneTypeName -ZoneType $zone.ZoneType
+    if (-not (Test-SyncableZoneType -Type $type)) { continue }
     $reverse = $false
     if ($name.ToLowerInvariant().EndsWith(".in-addr.arpa") -or $name.ToLowerInvariant().EndsWith(".ip6.arpa")) { $reverse = $true }
     $json = '{' +
@@ -845,6 +859,10 @@ function Add-LegacyRecord {
       [void](Invoke-DnsCmd -Arguments (Get-DnsCmdAddArguments -ZoneName $ZoneName -Name $name -Type $type -Value $value -WriteName $writeName))
     }
     catch {
+      if (Test-DnsCmdRecordAlreadyExistsError -Message $_.Exception.Message) {
+        Write-Warning ("Record already exists, skip add: " + $type + " " + $name + " " + $value)
+        return
+      }
       [void]$errors.Add($_.Exception.Message)
     }
     $created = Find-LegacyRecord -ZoneName $ZoneName -Name $name -Type $type -Value $value
