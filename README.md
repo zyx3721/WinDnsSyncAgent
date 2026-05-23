@@ -345,7 +345,7 @@ Legacy Agent 提供与 Go Agent 基本一致的接口：
 2008/2008 R2 服务器需要：
 
 - 已安装 DNS Server 角色。
-- PowerShell 可用，建议 PowerShell 2.0+。Windows Server 2008 SP2 如果仍是 PowerShell 1.0，请先安装 Windows Management Framework Core 2.0（`Windows6.0-KB968930-x64.msu`），详见 10.9。
+- PowerShell 可用，建议 PowerShell 2.0+。Windows Server 2008 SP2 如果仍是 PowerShell 1.0，请先安装 Windows Management Framework Core 2.0（`Windows6.0-KB968930-x64.msu`），详见 [10.9](#109-windows-server-2008-sp2-运行脚本时报--executionpolicy-或--File-参数错误怎么办)。
 - 当前账号可以读取 `root\MicrosoftDNS` WMI 命名空间。
 - 如果需要写操作，当前账号需要 DNS 管理权限，并且系统能找到 `dnscmd.exe`。
 - 如果 2008/2008 R2 作为目标端接收写入请求，需要可加载 `.NET Framework` 的 `System.Web.Extensions` 程序集，用于解析批量写入接口的 JSON 请求体。多数 2008 R2 环境可通过启用/安装 .NET Framework 3.5.1 或 4.x 满足，详见 [10.8](#108-2008-目标端报-json-request-body-parsing-requires-net-systemwebextensions-怎么办)。
