@@ -260,6 +260,12 @@ function Test-DnsCmdRecordAlreadyExistsError {
   return ($text -match "DNS_ERROR_RECORD_ALREADY_EXISTS") -or ($text -match "\b9711\b") -or ($text -match "0x25EF")
 }
 
+function Test-DnsCmdNameDoesNotExistError {
+  param([string]$Message)
+  $text = [string]$Message
+  return ($text -match "DNS_ERROR_NAME_DOES_NOT_EXIST") -or ($text -match "\b9714\b") -or ($text -match "0x25F2")
+}
+
 function Test-ZoneExists {
   param([string]$ZoneName)
   if (Test-BlankString $ZoneName) { return $false }
@@ -892,7 +898,16 @@ function Remove-LegacyRecord {
     Write-Warning ("Record not found, skip delete: " + $type + " " + $name + " " + $value)
     return
   }
-  [void](Invoke-DnsCmd -Arguments (Get-DnsCmdDeleteArguments -ZoneName $ZoneName -Name $name -Type $type -Value $value))
+  try {
+    [void](Invoke-DnsCmd -Arguments (Get-DnsCmdDeleteArguments -ZoneName $ZoneName -Name $name -Type $type -Value $value))
+  }
+  catch {
+    if (Test-DnsCmdNameDoesNotExistError -Message $_.Exception.Message) {
+      Write-Warning ("Record not found, skip delete: " + $type + " " + $name + " " + $value)
+      return
+    }
+    throw
+  }
 }
 
 function Update-LegacyRecord {
