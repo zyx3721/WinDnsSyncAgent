@@ -961,6 +961,11 @@ go build -o windnssyncagent.exe ./cmd/windnssyncagent
 
 # 十二、版本历史
 
+## v1.0.1 - 2026-05-23
+
+- 稳定性修复与同步性能优化版本，新增记录批次大小和请求超时配置，优化 `mirror` 模式排除 Zone 保护，并增强 Windows Server 2008/2008 R2 Legacy Agent 新增、删除记录的幂等处理。
+- 详细更新日志见 [verchanglog/v1.0.1.md](verchanglog/v1.0.1.md)。
+
 ## v1.0.0 - 2026-5-22
 
 - 首个正式版本，完成 Go Agent、2008/2008 R2 Legacy Agent、DNS Zone/Record 同步、子级域目录同步、委派 NS 同步、include/exclude 选择规则、dryRun、rewrite 和发布包构建流程。
