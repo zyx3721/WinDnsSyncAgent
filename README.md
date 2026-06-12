@@ -988,6 +988,12 @@ go build -o windnssyncagent.exe ./cmd/windnssyncagent
 
 # 十二、版本历史
 
+## v1.0.3 - 2026-06-13
+
+- 新增 `excludeRecords` 同步记录排除配置，避免指定解析记录参与新增、更新或删除判断。
+- Go Agent 新增 `powerShellTimeoutSeconds` 配置，支持调整内部 PowerShell 脚本执行超时。
+- 详细更新日志见 [verchanglog/v1.0.3.md](verchanglog/v1.0.3.md)。
+
 ## v1.0.2 - 2026-06-12
 
 - Go Agent 记录查询和批量写入新增 body 版接口，避免 Zone 名称出现在 HTTP URL 路径中；同步端优先使用新接口，并在目标端为 Legacy Agent 或旧版 Go Agent 时自动回退旧路径接口。
