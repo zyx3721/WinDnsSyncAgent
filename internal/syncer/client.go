@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -63,6 +64,13 @@ func (c client) deleteZone(ctx context.Context, zone string) error {
 
 func (c client) listRecords(ctx context.Context, zone string) ([]dns.Record, error) {
 	var records []dns.Record
+	if err := c.do(ctx, http.MethodPost, "/dns/records/query", map[string]string{"zone": zone}, &records); err != nil {
+		if !isHTTPStatus(err, http.StatusNotFound) {
+			return nil, err
+		}
+	} else {
+		return records, nil
+	}
 	path := "/dns/zones/" + url.PathEscape(zone) + "/records"
 	err := c.do(ctx, http.MethodGet, path, nil, &records)
 	return records, err
@@ -82,6 +90,13 @@ func (c client) deleteRecord(ctx context.Context, zone string, record dns.Record
 
 func (c client) applyRecordBatch(ctx context.Context, zone string, batch dns.RecordBatch) error {
 	var data map[string]any
+	if err := c.do(ctx, http.MethodPost, "/dns/records/batch", map[string]any{"zone": zone, "batch": batch}, &data); err != nil {
+		if !isHTTPStatus(err, http.StatusNotFound) {
+			return err
+		}
+	} else {
+		return nil
+	}
 	path := "/dns/zones/" + url.PathEscape(zone) + "/records/batch"
 	return c.do(ctx, http.MethodPost, path, batch, &data)
 }
@@ -124,9 +139,9 @@ func (c client) do(ctx context.Context, method, path string, body any, out any) 
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 || !env.Success {
 		if env.Error != nil {
-			return fmt.Errorf("%s %s failed: %s", method, path, env.Error.Message)
+			return httpStatusError{method: method, path: path, statusCode: resp.StatusCode, message: env.Error.Message}
 		}
-		return fmt.Errorf("%s %s failed with status %d", method, path, resp.StatusCode)
+		return httpStatusError{method: method, path: path, statusCode: resp.StatusCode}
 	}
 	if out != nil && len(env.Data) > 0 {
 		if err := json.Unmarshal(env.Data, out); err != nil {
@@ -134,4 +149,23 @@ func (c client) do(ctx context.Context, method, path string, body any, out any) 
 		}
 	}
 	return nil
+}
+
+type httpStatusError struct {
+	method     string
+	path       string
+	statusCode int
+	message    string
+}
+
+func (e httpStatusError) Error() string {
+	if strings.TrimSpace(e.message) != "" {
+		return fmt.Sprintf("%s %s failed: %s", e.method, e.path, e.message)
+	}
+	return fmt.Sprintf("%s %s failed with status %d", e.method, e.path, e.statusCode)
+}
+
+func isHTTPStatus(err error, statusCode int) bool {
+	var statusErr httpStatusError
+	return errors.As(err, &statusErr) && statusErr.statusCode == statusCode
 }

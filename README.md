@@ -340,6 +340,13 @@ Legacy Agent 提供与 Go Agent 基本一致的接口：
 - `DELETE /dns/zones/{zone}/records/{type}/{name}?value={value}`
 - `POST /dns/zones/{zone}/records/batch`
 
+Go Agent 额外提供 body 版记录接口，避免 Zone 名称出现在明文 HTTP URL 路径中：
+
+- `POST /dns/records/query`
+- `POST /dns/records/batch`
+
+同步程序会优先调用 Go Agent 的 body 版接口；如果目标端是 2008/2008 R2 Legacy Agent 或旧版 Go Agent，接口返回 `404` 后会自动回退到上方旧路径接口。
+
 ## 5.2 前提条件
 
 2008/2008 R2 服务器需要：
@@ -505,9 +512,11 @@ curl.exe -X POST `
 | `POST` | `/dns/zones` | 支持 | 支持 | 创建 Primary Zone。Legacy Agent 使用 `dnscmd.exe /ZoneAdd`。 |
 | `DELETE` | `/dns/zones/{zone}` | 支持 | 支持 | 删除指定 Zone。`mirror` 模式下可能用于删除目标端多余 Zone。 |
 | `GET` | `/dns/zones/{zone}/records` | 支持 | 支持 | 获取指定 Zone 的解析记录。 |
+| `POST` | `/dns/records/query` | 支持 | 不支持 | 获取指定 Zone 的解析记录，Zone 名称通过 JSON body 的 `zone` 字段传递。同步程序优先使用，Legacy Agent 返回 `404` 后自动回退旧 GET 接口。 |
 | `POST` | `/dns/zones/{zone}/records` | 支持 | 支持 | 新增解析记录。Legacy Agent 使用 `dnscmd.exe /RecordAdd`。 |
 | `DELETE` | `/dns/zones/{zone}/records/{type}/{name}?value={value}` | 支持 | 支持 | 删除精确匹配的解析记录。Legacy Agent 使用 `dnscmd.exe /RecordDelete`。 |
 | `POST` | `/dns/zones/{zone}/records/batch` | 支持 | 支持 | 批量新增、删除、更新记录。同步程序主要使用此接口。 |
+| `POST` | `/dns/records/batch` | 支持 | 不支持 | 批量新增、删除、更新记录，Zone 名称通过 JSON body 的 `zone` 字段传递，批次内容通过 `batch` 字段传递。同步程序优先使用，Legacy Agent 返回 `404` 后自动回退旧 batch 接口。 |
 
 当前 Agent API 支持读取记录类型：`A`、`AAAA`、`CNAME`、`MX`、`TXT`、`PTR`、`NS`、`SRV`。Legacy 写操作支持 `A`、`AAAA`、`CNAME`、`MX`、`TXT`、`PTR`、`NS`、`SRV`。
 
@@ -642,10 +651,10 @@ zone example.com not found on source
 同步程序会先按 Zone 计算新增、更新和删除操作。`dryRun=true` 时只输出完整计划，不会写入目标端；`dryRun=false` 时会按 `recordBatchSize` 配置分批处理，每批先输出该批计划日志，再提交给目标 Agent：
 
 ```text
-POST /dns/zones/{zone}/records/batch
+POST /dns/records/batch
 ```
 
-每次提交仍使用目标 Agent 的批量接口，单批规模由 `recordBatchSize` 控制，默认 `50`。这样可以减少超大批次触发 HTTP 超时的概率。`requestTimeoutSeconds` 针对每一次 HTTP 请求单独计时，包括每一批记录写入；它不是整个同步任务的总超时时间。目标端为 Windows Server 2008/2008 R2 Legacy Agent 时建议配置为 `5` 到 `10`，并按需把 `requestTimeoutSeconds` 调整为 `300` 或 `600`；目标端为 Windows Server 2012+ Go Agent 时可使用默认值或按性能调大。Go Agent 执行 PowerShell 时会先写入临时 `.ps1` 文件再通过 `-File` 运行，避免记录内容较长时触发 Windows 命令行长度限制。
+每次提交优先使用目标 Go Agent 的 body 版批量接口，避免 Zone 名称出现在 HTTP URL 路径中；目标端为 Windows Server 2008/2008 R2 Legacy Agent 或旧版 Go Agent 时会自动回退到 `POST /dns/zones/{zone}/records/batch`。单批规模由 `recordBatchSize` 控制，默认 `50`。这样可以减少超大批次触发 HTTP 超时的概率。`requestTimeoutSeconds` 针对每一次 HTTP 请求单独计时，包括每一批记录写入；它不是整个同步任务的总超时时间。目标端为 Windows Server 2008/2008 R2 Legacy Agent 时建议配置为 `5` 到 `10`，并按需把 `requestTimeoutSeconds` 调整为 `300` 或 `600`；目标端为 Windows Server 2012+ Go Agent 时可使用默认值或按性能调大。Go Agent 执行 PowerShell 时会先写入临时 `.ps1` 文件再通过 `-File` 运行，避免记录内容较长时触发 Windows 命令行长度限制。
 
 对于同一个 Zone 中同名同类型的单条 `A` / `AAAA` 记录，如果只是 IP 不同且当前为 `mirror` 模式，程序会识别为 `update`。Go Agent 会优先使用 `Set-DnsServerResourceRecord` 更新记录，更新失败时回退为删除旧记录再新增新记录；Windows Server 2008/2008 R2 Legacy Agent 没有原生 update 命令，会直接用 `dnscmd.exe` 删除旧记录再新增新记录。对于同名同类型的多 IP 记录，包括名称为 `@` 的“与父文件夹相同”记录，程序会按 `zone + type + name + value` 精确判断，源端缺少的 IP 才新增，目标端多余的 IP 仅在 `mirror` 模式删除。程序内部统一使用 `@` 表示控制台里的“名称为空则使用父域名称”。
 

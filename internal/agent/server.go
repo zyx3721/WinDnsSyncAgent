@@ -42,6 +42,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/dns/zones", s.handleZones)
+	mux.HandleFunc("/dns/records/query", s.handleRecordQuery)
+	mux.HandleFunc("/dns/records/batch", s.handleRecordBatchByBody)
 	mux.HandleFunc("/dns/zones/", s.handleZoneRoutes)
 
 	addr := fmt.Sprintf(":%d", s.cfg.Port)
@@ -124,6 +126,60 @@ func (s *Server) handleZones(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusMethodNotAllowed, requestID(r), "METHOD_NOT_ALLOWED", "method not allowed")
 	}
+}
+
+func (s *Server) handleRecordQuery(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, requestID(r), "METHOD_NOT_ALLOWED", "method not allowed")
+		return
+	}
+	var body struct {
+		Zone string `json:"zone"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, requestID(r), "BAD_REQUEST", err.Error())
+		return
+	}
+	zone := strings.TrimSpace(body.Zone)
+	if zone == "" {
+		writeError(w, http.StatusBadRequest, requestID(r), "BAD_REQUEST", "zone is required")
+		return
+	}
+	records, err := s.provider.ListRecords(r.Context(), zone)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, requestID(r), "DNS_ERROR", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{Success: true, Request: requestID(r), Data: records})
+}
+
+func (s *Server) handleRecordBatchByBody(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, requestID(r), "METHOD_NOT_ALLOWED", "method not allowed")
+		return
+	}
+	var body struct {
+		Zone  string          `json:"zone"`
+		Batch dns.RecordBatch `json:"batch"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, requestID(r), "BAD_REQUEST", err.Error())
+		return
+	}
+	zone := strings.TrimSpace(body.Zone)
+	if zone == "" {
+		writeError(w, http.StatusBadRequest, requestID(r), "BAD_REQUEST", "zone is required")
+		return
+	}
+	if err := s.provider.ApplyRecordBatch(r.Context(), zone, body.Batch); err != nil {
+		writeError(w, http.StatusInternalServerError, requestID(r), "DNS_ERROR", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{Success: true, Request: requestID(r), Data: map[string]int{
+		"added":   len(body.Batch.Add),
+		"deleted": len(body.Batch.Delete),
+		"updated": len(body.Batch.Update),
+	}})
 }
 
 func (s *Server) handleZoneRoutes(w http.ResponseWriter, r *http.Request) {

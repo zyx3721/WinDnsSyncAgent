@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"windnssyncagent/internal/config"
@@ -45,5 +46,29 @@ func TestProtectedRouteRequiresAPIKey(t *testing.T) {
 
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected protected route without api key to return 401, got %d", recorder.Code)
+	}
+}
+
+func TestRecordQueryUsesBodyZone(t *testing.T) {
+	server := NewServer(config.Agent{AllowAnonymous: true}, fakeProvider{})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/dns/records/query", strings.NewReader(`{"zone":"youtube.com"}`))
+
+	server.withMiddleware(http.HandlerFunc(server.handleRecordQuery)).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected record query to return 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestRecordBatchByBodyUsesBodyZone(t *testing.T) {
+	server := NewServer(config.Agent{AllowAnonymous: true}, fakeProvider{})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/dns/records/batch", strings.NewReader(`{"zone":"youtube.com","batch":{"add":[],"delete":[],"update":[]}}`))
+
+	server.withMiddleware(http.HandlerFunc(server.handleRecordBatchByBody)).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected record batch to return 200, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
