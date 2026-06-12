@@ -6,6 +6,7 @@
     "example.com"
   ],
   "excludeZones": [],
+  "excludeRecords": [],
   "zoneConcurrency": 2,
   "recordBatchSize": 50,
   "requestTimeoutSeconds": 90,

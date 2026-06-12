@@ -6,6 +6,64 @@ import (
 	"testing"
 )
 
+func TestLoadAgentDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.json")
+	content := `{
+  "scheme": "http",
+  "port": 8443,
+  "allowAnonymous": true
+}`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadAgent(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PowerShellTimeoutSeconds != 180 {
+		t.Fatalf("expected powerShellTimeoutSeconds default 180, got %d", cfg.PowerShellTimeoutSeconds)
+	}
+}
+
+func TestLoadAgentPowerShellTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.json")
+	content := `{
+  "scheme": "http",
+  "port": 8443,
+  "allowAnonymous": true,
+  "powerShellTimeoutSeconds": 300
+}`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadAgent(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PowerShellTimeoutSeconds != 300 {
+		t.Fatalf("expected powerShellTimeoutSeconds 300, got %d", cfg.PowerShellTimeoutSeconds)
+	}
+}
+
+func TestLoadAgentRejectsInvalidPowerShellTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.json")
+	content := `{
+  "scheme": "http",
+  "port": 8443,
+  "allowAnonymous": true,
+  "powerShellTimeoutSeconds": 3601
+}`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadAgent(path); err == nil {
+		t.Fatal("expected invalid powerShellTimeoutSeconds to fail")
+	}
+}
+
 func TestLoadSyncDefaults(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sync.json")
 	content := `{
@@ -13,6 +71,7 @@ func TestLoadSyncDefaults(t *testing.T) {
   "targetAgent": "http://target:8443/",
   "apiKey": "secret",
   "dryRun": true,
+  "excludeRecords": [{"zone":"example.com.","name":"ns.other.com","type":"a","value":"10.0.0.1"}],
   "rewriteRecords": [{"zone":"example.com","name":"www","targetIp":"10.0.0.1"}]
 }`
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
@@ -49,6 +108,9 @@ func TestLoadSyncDefaults(t *testing.T) {
 	}
 	if cfg.RequestTimeoutSeconds != 90 {
 		t.Fatalf("expected requestTimeoutSeconds default 90, got %d", cfg.RequestTimeoutSeconds)
+	}
+	if len(cfg.ExcludeRecords) != 1 || cfg.ExcludeRecords[0].Zone != "example.com" || cfg.ExcludeRecords[0].Type != "A" {
+		t.Fatalf("unexpected excludeRecords normalization: %#v", cfg.ExcludeRecords)
 	}
 }
 

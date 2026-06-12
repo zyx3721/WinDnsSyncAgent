@@ -255,6 +255,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\sync.ps1
   "port": 8443,
   "allowAnonymous": true,
   "apiKey": "CHANGE_ME",
+  "powerShellTimeoutSeconds": 180,
   "logPath": "C:\\ProgramData\\WinDnsSyncAgent\\agent.log"
 }
 ```
@@ -265,6 +266,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\sync.ps1
 | `port` | number | Agent 监听端口。 |
 | `allowAnonymous` | bool | 是否允许匿名访问。生产建议设为 `false`。 |
 | `apiKey` | string | `allowAnonymous=false` 时客户端必须通过 `X-API-Key` 传入。 |
+| `powerShellTimeoutSeconds` | number | Go Agent 内部单次 `powershell.exe` 脚本执行超时时间，默认 `180` 秒，最大允许 `3600` 秒。Legacy Agent 当前仍按原方式直接执行 `dnscmd.exe`，不使用该字段限制命令时长。 |
 | `logPath` | string | 日志路径。 |
 
 Go Agent 和 Windows Server 2008 Legacy Agent 都读取这份 `agent.json`。
@@ -280,6 +282,7 @@ Go Agent 和 Windows Server 2008 Legacy Agent 都读取这份 `agent.json`。
   "apiKey": "",
   "includeZones": ["example.com"],
   "excludeZones": [],
+  "excludeRecords": [],
   "zoneConcurrency": 2,
   "recordBatchSize": 50,
   "requestTimeoutSeconds": 90,
@@ -308,6 +311,7 @@ Go Agent 和 Windows Server 2008 Legacy Agent 都读取这份 `agent.json`。
 | `targetApiKey` | string | 目标 Agent 单独 API Key。未配置时使用 `apiKey`。 |
 | `includeZones` | string[] | 要同步的 Zone 或 Zone 下的子级域目录。为空时默认同步源端全部正向业务区域，不自动同步反向区域，并跳过 `TrustAnchors` 等系统区域。显式配置 `test.cursor.com` 且源端存在 `cursor.com` Zone 时，会只同步 `cursor.com` 下的 `test` 节点及其子节点记录。旧配置字段 `zones` 仍可兼容读取，但建议迁移到 `includeZones`。 |
 | `excludeZones` | string[] | 要排除的 Zone 或 Zone 下的子级域目录。默认为空数组，表示不排除任何区域。显式配置 `test.cursor.com` 且源端存在 `cursor.com` Zone 时，会排除 `cursor.com` 下的 `test` 节点及其子节点记录；若目标端存在独立的 `test.cursor.com` Zone，即使源端不存在该 Zone，`mirror` 模式也不会删除该目标 Zone。 |
+| `excludeRecords` | object[] | 要排除的记录规则。命中规则的源端和目标端记录都不会参与新增、更新或删除判断。规则字段支持 `zone`、`name`、`type`、`value`，字段为空表示任意。 |
 | `zoneConcurrency` | number | Zone 级并发数。默认 `2`，建议生产使用 `2` 到 `4`，最大允许 `16`。 |
 | `recordBatchSize` | number | 每次提交给目标 Agent 的记录数量。默认 `50`，最大允许 `500`。目标端为 Windows Server 2008/2008 R2 Legacy Agent 时建议配置为 `5` 到 `10`；目标端为 Windows Server 2012+ Go Agent 时可使用默认值或按性能调大。 |
 | `requestTimeoutSeconds` | number | 同步端等待源/目标 Agent 单次 HTTP 请求响应的超时时间。默认 `90` 秒，最大允许 `3600` 秒。目标端为 Windows Server 2008/2008 R2 Legacy Agent 且批量写入较慢时，可配置为 `300` 或 `600`。 |
@@ -400,7 +404,7 @@ agent.json
 Legacy 写入使用 `dnscmd.exe`，主要用于解决 Windows Server 2008/2008 R2 没有新版 `DnsServer` PowerShell 模块的问题。它和 Go Agent 的行为有几个差异：
 
 - 支持同步常用记录类型：`A`、`AAAA`、`CNAME`、`MX`、`TXT`、`PTR`、`NS`、`SRV`。其中非根节点 `NS` 记录用于同步 DNS 委派。
-- 读取记录时先使用 `dnscmd.exe /EnumRecords <zone> @ /Additional` 枚举根节点记录，再使用 `dnscmd.exe /ZonePrint <zone>` 从完整记录名中发现子级目录和单标签委派节点，并对这些目录继续执行 `dnscmd.exe /EnumRecords <zone> <node> /Additional` 补充枚举，例如 `yfb`、`test.yfb`、`vdesktop`。解析时会根据 `dnscmd.exe` 输出中的当前节点上下文拼接子域记录名，例如 `aduser.boss`。如果旧环境只接受 `/Addtional` 拼写，Legacy Agent 会自动回退重试。Windows Server 2008/2008 R2 的 MicrosoftDNS WMI 在部分环境下无法稳定读取子域记录，因此 Legacy Agent 不再使用 WMI 作为记录读取路径。
+- 读取记录时先使用 `dnscmd.exe /EnumRecords <zone> @` 枚举根节点记录，再使用 `dnscmd.exe /ZonePrint <zone>` 从完整记录名中发现子级目录和单标签委派节点，并对这些目录继续执行 `dnscmd.exe /EnumRecords <zone> <node>` 补充枚举，例如 `yfb`、`test.yfb`、`vdesktop`。解析时会根据 `dnscmd.exe` 输出中的当前节点上下文拼接子域记录名，例如 `aduser.boss`。Windows Server 2008/2008 R2 的 MicrosoftDNS WMI 在部分环境下无法稳定读取子域记录，因此 Legacy Agent 不再使用 WMI 作为记录读取路径。
 - 同名多 IP 记录在 `dnscmd.exe` 输出中可能只有第一行显示名称，后续行只显示 TTL、类型和值；Legacy Agent 会用独立的“上一条记录名”状态继承续行，避免后续 IP 被误判为 `@` 记录，也避免普通记录名污染当前节点上下文。
 - `SOA` 和 Zone 根节点 `NS` 会被保护，不会新增、更新或删除；非根节点 `NS` 会作为委派记录参与同步。
 - `update` 没有真正的原生命令，会兼容实现为“删除旧记录，再新增新记录”。如果新记录已经存在，会跳过。
@@ -607,6 +611,20 @@ zone example.com not found on source
 
 `excludeZones` 会同时用于保护目标端独有 Zone。比如目标端存在独立的 `test.cursor.com` Zone，而源端不存在该 Zone 时，配置上述排除项后，`mirror` 模式不会删除目标端的 `test.cursor.com` Zone。如果目标端只有 `cursor.com` Zone，则该配置仍按子级域目录处理，只排除 `cursor.com` 下的 `test` 节点及其子节点记录。
 
+如果需要排除某条记录，可以配置 `excludeRecords`。命中排除规则的记录会在源端和目标端同时过滤，不参与新增、更新或删除判断：
+
+```json
+"excludeRecords": [
+  {
+    "name": "win2008-around.oa.com",
+    "type": "A",
+    "value": "10.10.200.253"
+  }
+]
+```
+
+`zone`、`name`、`type`、`value` 都是可选字段，字段为空表示任意。生产环境建议至少配置 `name + type + value`，避免规则过宽导致真实业务记录被排除；如果只想排除某个 Zone 内的记录，可额外配置 `zone`。
+
 不建议同步 `TrustAnchors`。它是 DNSSEC 信任锚相关的系统区域，不属于普通业务解析区域。
 
 ### 7.1.2 更新关联 PTR 指针记录
@@ -654,7 +672,7 @@ zone example.com not found on source
 POST /dns/records/batch
 ```
 
-每次提交优先使用目标 Go Agent 的 body 版批量接口，避免 Zone 名称出现在 HTTP URL 路径中；目标端为 Windows Server 2008/2008 R2 Legacy Agent 或旧版 Go Agent 时会自动回退到 `POST /dns/zones/{zone}/records/batch`。单批规模由 `recordBatchSize` 控制，默认 `50`。这样可以减少超大批次触发 HTTP 超时的概率。`requestTimeoutSeconds` 针对每一次 HTTP 请求单独计时，包括每一批记录写入；它不是整个同步任务的总超时时间。目标端为 Windows Server 2008/2008 R2 Legacy Agent 时建议配置为 `5` 到 `10`，并按需把 `requestTimeoutSeconds` 调整为 `300` 或 `600`；目标端为 Windows Server 2012+ Go Agent 时可使用默认值或按性能调大。Go Agent 执行 PowerShell 时会先写入临时 `.ps1` 文件再通过 `-File` 运行，避免记录内容较长时触发 Windows 命令行长度限制。
+每次提交优先使用目标 Go Agent 的 body 版批量接口，避免 Zone 名称出现在 HTTP URL 路径中；目标端为 Windows Server 2008/2008 R2 Legacy Agent 或旧版 Go Agent 时会自动回退到 `POST /dns/zones/{zone}/records/batch`。单批规模由 `recordBatchSize` 控制，默认 `50`。这样可以减少超大批次触发 HTTP 超时的概率。`requestTimeoutSeconds` 针对每一次 HTTP 请求单独计时，包括每一批记录写入；它不是整个同步任务的总超时时间。目标端为 Windows Server 2008/2008 R2 Legacy Agent 时建议配置为 `5` 到 `10`，并按需把 `requestTimeoutSeconds` 调整为 `300` 或 `600`；目标端为 Windows Server 2012+ Go Agent 时可使用默认值或按性能调大。`agent.json` 里的 `powerShellTimeoutSeconds` 控制 Go Agent 内部单次 PowerShell 脚本执行时间，建议 `requestTimeoutSeconds` 大于 `powerShellTimeoutSeconds` 并预留网络和 JSON 序列化余量。Go Agent 执行 PowerShell 时会先写入临时 `.ps1` 文件再通过 `-File` 运行，避免记录内容较长时触发 Windows 命令行长度限制。
 
 对于同一个 Zone 中同名同类型的单条 `A` / `AAAA` 记录，如果只是 IP 不同且当前为 `mirror` 模式，程序会识别为 `update`。Go Agent 会优先使用 `Set-DnsServerResourceRecord` 更新记录，更新失败时回退为删除旧记录再新增新记录；Windows Server 2008/2008 R2 Legacy Agent 没有原生 update 命令，会直接用 `dnscmd.exe` 删除旧记录再新增新记录。对于同名同类型的多 IP 记录，包括名称为 `@` 的“与父文件夹相同”记录，程序会按 `zone + type + name + value` 精确判断，源端缺少的 IP 才新增，目标端多余的 IP 仅在 `mirror` 模式删除。程序内部统一使用 `@` 表示控制台里的“名称为空则使用父域名称”。
 

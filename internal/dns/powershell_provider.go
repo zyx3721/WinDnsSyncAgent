@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -12,10 +13,21 @@ import (
 	"time"
 )
 
-type PowerShellProvider struct{}
+const defaultPowerShellTimeout = 180 * time.Second
+
+type PowerShellProvider struct {
+	timeout time.Duration
+}
 
 func NewPowerShellProvider() *PowerShellProvider {
-	return &PowerShellProvider{}
+	return NewPowerShellProviderWithTimeout(defaultPowerShellTimeout)
+}
+
+func NewPowerShellProviderWithTimeout(timeout time.Duration) *PowerShellProvider {
+	if timeout <= 0 {
+		timeout = defaultPowerShellTimeout
+	}
+	return &PowerShellProvider{timeout: timeout}
 }
 
 func (p *PowerShellProvider) ListZones(ctx context.Context) ([]Zone, error) {
@@ -47,7 +59,7 @@ ConvertTo-Json -InputObject $result -Depth 8
 `
 
 	var zones []Zone
-	if err := runJSON(ctx, script, &zones); err != nil {
+	if err := p.runJSON(ctx, script, &zones); err != nil {
 		return nil, err
 	}
 	return zones, nil
@@ -82,7 +94,7 @@ if ($reverse) {
 }
 `, psString(zone.Name), psString(zone.DynamicUpdate), psBool(zone.Reverse))
 
-	return run(ctx, script)
+	return p.run(ctx, script)
 }
 
 func (p *PowerShellProvider) DeleteZone(ctx context.Context, name string) error {
@@ -90,7 +102,7 @@ func (p *PowerShellProvider) DeleteZone(ctx context.Context, name string) error 
 Import-Module DnsServer -ErrorAction Stop
 Remove-DnsServerZone -Name %s -Force -ErrorAction Stop
 `, psString(name))
-	return run(ctx, script)
+	return p.run(ctx, script)
 }
 
 func (p *PowerShellProvider) ListRecords(ctx context.Context, zone string) ([]Record, error) {
@@ -131,7 +143,7 @@ ConvertTo-Json -InputObject $result -Depth 8
 `, psString(zone))
 
 	var records []Record
-	if err := runJSON(ctx, script, &records); err != nil {
+	if err := p.runJSON(ctx, script, &records); err != nil {
 		return nil, err
 	}
 	return records, nil
@@ -368,7 +380,7 @@ switch ($type) {
 }
 `, psString(zone), psString(record.Name), psString(strings.ToUpper(record.Type)), psString(record.Value), psBool(record.CreatePTR), record.TTL)
 
-	return run(ctx, script)
+	return p.run(ctx, script)
 }
 
 func (p *PowerShellProvider) DeleteRecord(ctx context.Context, zone string, record Record) error {
@@ -500,7 +512,7 @@ if (-not $target) {
 }
 `, psString(zone), psString(record.Name), psString(strings.ToUpper(record.Type)), psString(record.Value))
 
-	return run(ctx, script)
+	return p.run(ctx, script)
 }
 
 func (p *PowerShellProvider) ApplyRecordBatch(ctx context.Context, zone string, batch RecordBatch) error {
@@ -851,7 +863,7 @@ foreach ($record in @($batch.add)) { if ($null -ne $record) { Add-Record -Record
 foreach ($record in @($batch.delete)) { if ($null -ne $record) { Remove-RecordSafe -Record $record } }
 `, psString(zone), psString(string(payload)))
 
-	return run(ctx, script)
+	return p.run(ctx, script)
 }
 
 func validateRecord(record Record) error {
@@ -876,8 +888,8 @@ func validateRecord(record Record) error {
 	return nil
 }
 
-func runJSON(ctx context.Context, script string, dst any) error {
-	out, err := runOutput(ctx, script)
+func (p *PowerShellProvider) runJSON(ctx context.Context, script string, dst any) error {
+	out, err := p.runOutput(ctx, script)
 	if err != nil {
 		return err
 	}
@@ -891,13 +903,17 @@ func runJSON(ctx context.Context, script string, dst any) error {
 	return nil
 }
 
-func run(ctx context.Context, script string) error {
-	_, err := runOutput(ctx, script)
+func (p *PowerShellProvider) run(ctx context.Context, script string) error {
+	_, err := p.runOutput(ctx, script)
 	return err
 }
 
-func runOutput(ctx context.Context, script string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+func (p *PowerShellProvider) runOutput(ctx context.Context, script string) ([]byte, error) {
+	timeout := p.timeout
+	if timeout <= 0 {
+		timeout = defaultPowerShellTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	scriptFile, err := os.CreateTemp("", "windnssyncagent-*.ps1")
@@ -927,6 +943,12 @@ func runOutput(ctx context.Context, script string) ([]byte, error) {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("powershell timed out after %s", timeout)
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return nil, fmt.Errorf("powershell canceled")
+		}
 		message := strings.TrimSpace(stderr.String())
 		if message == "" {
 			message = err.Error()

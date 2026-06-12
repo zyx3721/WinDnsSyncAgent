@@ -3,6 +3,7 @@
   "port": 8443,
   "allowAnonymous": true,
   "apiKey": "CHANGE_ME",
+  "powerShellTimeoutSeconds": 180,
   "logPath": "C:\\ProgramData\\WinDnsSyncAgent\\agent.log"
 }
 

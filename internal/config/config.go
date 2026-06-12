@@ -8,11 +8,12 @@ import (
 )
 
 type Agent struct {
-	Scheme         string `json:"scheme"`
-	Port           int    `json:"port"`
-	AllowAnonymous bool   `json:"allowAnonymous"`
-	APIKey         string `json:"apiKey"`
-	LogPath        string `json:"logPath"`
+	Scheme                   string `json:"scheme"`
+	Port                     int    `json:"port"`
+	AllowAnonymous           bool   `json:"allowAnonymous"`
+	APIKey                   string `json:"apiKey"`
+	LogPath                  string `json:"logPath"`
+	PowerShellTimeoutSeconds int    `json:"powerShellTimeoutSeconds"`
 }
 
 type Sync struct {
@@ -23,17 +24,18 @@ type Sync struct {
 	SourceAPIKey string `json:"sourceApiKey"`
 	TargetAPIKey string `json:"targetApiKey"`
 
-	IncludeZones    []string        `json:"includeZones"`
-	ExcludeZones    []string        `json:"excludeZones"`
-	Zones           []string        `json:"zones,omitempty"`
-	ZoneConcurrency int             `json:"zoneConcurrency"`
-	RecordBatchSize int             `json:"recordBatchSize"`
-	RequestTimeoutSeconds int       `json:"requestTimeoutSeconds"`
-	SyncMode        string          `json:"syncMode"`
-	DryRun          bool            `json:"dryRun"`
-	CreatePTR       bool            `json:"createPtrRecords"`
-	EnableRewrite   bool            `json:"enableRewriteRecords"`
-	RewriteRecords  []RewriteRecord `json:"rewriteRecords"`
+	IncludeZones          []string        `json:"includeZones"`
+	ExcludeZones          []string        `json:"excludeZones"`
+	Zones                 []string        `json:"zones,omitempty"`
+	ZoneConcurrency       int             `json:"zoneConcurrency"`
+	RecordBatchSize       int             `json:"recordBatchSize"`
+	RequestTimeoutSeconds int             `json:"requestTimeoutSeconds"`
+	SyncMode              string          `json:"syncMode"`
+	DryRun                bool            `json:"dryRun"`
+	CreatePTR             bool            `json:"createPtrRecords"`
+	EnableRewrite         bool            `json:"enableRewriteRecords"`
+	RewriteRecords        []RewriteRecord `json:"rewriteRecords"`
+	ExcludeRecords        []RecordPattern `json:"excludeRecords"`
 }
 
 type RewriteRecord struct {
@@ -43,6 +45,13 @@ type RewriteRecord struct {
 	OldIP    string `json:"oldIp"`
 	TargetIP string `json:"targetIp"`
 	TTL      int    `json:"ttl"`
+}
+
+type RecordPattern struct {
+	Zone  string `json:"zone"`
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	Value string `json:"value"`
 }
 
 func LoadAgent(path string) (Agent, error) {
@@ -60,6 +69,12 @@ func LoadAgent(path string) (Agent, error) {
 	}
 	if cfg.Port <= 0 || cfg.Port > 65535 {
 		return cfg, fmt.Errorf("port must be between 1 and 65535")
+	}
+	if cfg.PowerShellTimeoutSeconds <= 0 {
+		cfg.PowerShellTimeoutSeconds = 180
+	}
+	if cfg.PowerShellTimeoutSeconds > 3600 {
+		return cfg, fmt.Errorf("powerShellTimeoutSeconds must be between 1 and 3600")
 	}
 	if !cfg.AllowAnonymous && strings.TrimSpace(cfg.APIKey) == "" {
 		return cfg, fmt.Errorf("apiKey is required when allowAnonymous is false")
@@ -124,6 +139,12 @@ func LoadSync(path string) (Sync, error) {
 		if cfg.RewriteRecords[i].Type == "" {
 			cfg.RewriteRecords[i].Type = "A"
 		}
+	}
+	for i := range cfg.ExcludeRecords {
+		cfg.ExcludeRecords[i].Zone = strings.Trim(strings.TrimSpace(cfg.ExcludeRecords[i].Zone), ".")
+		cfg.ExcludeRecords[i].Name = strings.TrimSpace(cfg.ExcludeRecords[i].Name)
+		cfg.ExcludeRecords[i].Type = strings.ToUpper(strings.TrimSpace(cfg.ExcludeRecords[i].Type))
+		cfg.ExcludeRecords[i].Value = strings.TrimSpace(cfg.ExcludeRecords[i].Value)
 	}
 
 	return cfg, nil

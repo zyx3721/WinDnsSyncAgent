@@ -46,7 +46,7 @@ func runAgent(args []string) {
 		log.Fatalf("load agent config: %v", err)
 	}
 
-	provider := dns.NewPowerShellProvider()
+	provider := dns.NewPowerShellProviderWithTimeout(time.Duration(cfg.PowerShellTimeoutSeconds) * time.Second)
 	server := agent.NewServer(cfg, provider)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

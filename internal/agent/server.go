@@ -98,8 +98,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, envelope{Success: true, Request: requestID(r), Data: map[string]any{
-		"status": "ok",
-		"time":   time.Now().Format(time.RFC3339Nano),
+		"status":                   "ok",
+		"time":                     time.Now().Format(time.RFC3339Nano),
+		"powerShellTimeoutSeconds": s.cfg.PowerShellTimeoutSeconds,
 	}})
 }
 

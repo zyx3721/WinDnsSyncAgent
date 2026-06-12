@@ -197,12 +197,14 @@ func syncZone(ctx context.Context, cfg config.Sync, source, target client, selec
 	}
 	sourceRecords = filterSyncRecords(sourceRecords)
 	sourceRecords = filterRecordsBySelection(sourceRecords, selection)
+	sourceRecords = filterRecordsByExcludePatterns(zoneName, sourceRecords, cfg.ExcludeRecords)
 	targetRecords, err := target.listRecords(ctx, zoneName)
 	if err != nil {
 		return result, fmt.Errorf("list target records for %s: %w", zoneName, err)
 	}
 	targetRecords = filterSyncRecords(targetRecords)
 	targetRecords = filterRecordsBySelection(targetRecords, selection)
+	targetRecords = filterRecordsByExcludePatterns(zoneName, targetRecords, cfg.ExcludeRecords)
 
 	adds, deletes, updates := diffRecords(zoneName, sourceRecords, targetRecords, cfg.SyncMode)
 	for i := range adds {
@@ -760,6 +762,42 @@ func filterRecordsBySelection(records []dns.Record, selection zoneSelection) []d
 	return filtered
 }
 
+func filterRecordsByExcludePatterns(zoneName string, records []dns.Record, patterns []config.RecordPattern) []dns.Record {
+	if len(patterns) == 0 || len(records) == 0 {
+		return records
+	}
+	filtered := make([]dns.Record, 0, len(records))
+	for _, record := range records {
+		excluded := false
+		for _, pattern := range patterns {
+			if recordMatchesExcludePattern(zoneName, record, pattern) {
+				excluded = true
+				break
+			}
+		}
+		if !excluded {
+			filtered = append(filtered, record)
+		}
+	}
+	return filtered
+}
+
+func recordMatchesExcludePattern(zoneName string, record dns.Record, pattern config.RecordPattern) bool {
+	if strings.TrimSpace(pattern.Zone) != "" && !sameDNSName(zoneName, pattern.Zone) {
+		return false
+	}
+	if strings.TrimSpace(pattern.Name) != "" && !sameDNSName(record.Name, pattern.Name) {
+		return false
+	}
+	if strings.TrimSpace(pattern.Type) != "" && !strings.EqualFold(strings.TrimSpace(record.Type), strings.TrimSpace(pattern.Type)) {
+		return false
+	}
+	if strings.TrimSpace(pattern.Value) != "" && !sameRecordValue(record.Type, record.Value, pattern.Value) {
+		return false
+	}
+	return true
+}
+
 func normalizeNodeName(value string) string {
 	name := strings.Trim(strings.TrimSpace(value), ".")
 	if name == "" {
@@ -817,6 +855,18 @@ func normalizedTTL(ttl int) int {
 
 func sameRecordName(left, right string) bool {
 	return strings.EqualFold(strings.TrimSpace(left), strings.TrimSpace(right))
+}
+
+func sameDNSName(left, right string) bool {
+	return strings.EqualFold(strings.Trim(strings.TrimSpace(left), "."), strings.Trim(strings.TrimSpace(right), "."))
+}
+
+func sameRecordValue(recordType, left, right string) bool {
+	typeName := strings.ToUpper(strings.TrimSpace(recordType))
+	if typeName == "A" || typeName == "AAAA" {
+		return sameRecordIP(left, right)
+	}
+	return sameDNSName(left, right)
 }
 
 func sameRecordIP(left, right string) bool {

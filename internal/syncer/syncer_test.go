@@ -234,6 +234,30 @@ func TestFilterRecordsBySelectionExcludesSubtree(t *testing.T) {
 	}
 }
 
+func TestFilterRecordsByExcludePatterns(t *testing.T) {
+	records := filterRecordsByExcludePatterns("bankmestika.co.id", []dns.Record{
+		{Name: "win2008-around.oa.com", Type: "A", Value: "10.10.200.253"},
+		{Name: "www", Type: "A", Value: "10.10.200.10"},
+	}, []config.RecordPattern{{
+		Name:  "win2008-around.oa.com.",
+		Type:  "a",
+		Value: "10.10.200.253",
+	}})
+	if len(records) != 1 || records[0].Name != "www" {
+		t.Fatalf("expected additional A record excluded, got %#v", records)
+	}
+}
+
+func TestExcludePatternsCanBeScopedToZone(t *testing.T) {
+	pattern := config.RecordPattern{Zone: "example.com", Name: "ns.other.com", Type: "A", Value: "10.0.0.1"}
+	if !recordMatchesExcludePattern("example.com", dns.Record{Name: "ns.other.com.", Type: "A", Value: "10.0.0.1"}, pattern) {
+		t.Fatal("expected matching zone record to be excluded")
+	}
+	if recordMatchesExcludePattern("other.com", dns.Record{Name: "ns.other.com.", Type: "A", Value: "10.0.0.1"}, pattern) {
+		t.Fatal("expected different zone record to be kept")
+	}
+}
+
 func TestWithCreatePTROnlyMarksARecords(t *testing.T) {
 	a := withCreatePTR(dns.Record{Type: "A"}, true)
 	if !a.CreatePTR {
