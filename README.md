@@ -992,6 +992,13 @@ go build -o windnssyncagent.exe ./cmd/windnssyncagent
 
 # 十二、版本历史
 
+## v1.0.4 - 2026-06-22
+
+- Legacy Agent 新增 body 版记录查询和批量同步接口，避免 Zone 名称出现在 URL 路径中。
+- Legacy Agent body 版接口使用脚本内置轻量解析逻辑，不依赖 `.NET System.Web.Extensions`。
+- 同步日志调整为真实批量写入成功后再输出，避免失败时误判记录已写入。
+- 详细更新日志见 [verchanglog/v1.0.4.md](verchanglog/v1.0.4.md)。
+
 ## v1.0.3 - 2026-06-13
 
 - 新增 `excludeRecords` 同步记录排除配置，避免指定解析记录参与新增、更新或删除判断。
