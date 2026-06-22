@@ -1,6 +1,10 @@
 package syncer
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -286,5 +290,77 @@ func TestMergeResults(t *testing.T) {
 	}
 	if len(merged.ZonesCreated) != 1 || len(merged.ZonesDeleted) != 1 || len(merged.Messages) != 3 {
 		t.Fatalf("unexpected merged result: %#v", merged)
+	}
+}
+
+func TestRunDoesNotLogRecordBatchBeforeSuccessfulApply(t *testing.T) {
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeSyncerTestEnvelope(t, w, sourceSyncerTestData(r))
+	}))
+	defer source.Close()
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/dns/records/batch" {
+			writeSyncerTestEnvelope(t, w, map[string]any{
+				"success": false,
+				"error":   map[string]string{"code": "DNS_ERROR", "message": "batch failed"},
+			})
+			return
+		}
+		writeSyncerTestEnvelope(t, w, targetSyncerTestData(r))
+	}))
+	defer target.Close()
+
+	result, err := Run(context.Background(), config.Sync{
+		SourceAgent:           source.URL,
+		TargetAgent:           target.URL,
+		IncludeZones:          []string{"example.com"},
+		SyncMode:              "mirror",
+		ZoneConcurrency:       1,
+		RecordBatchSize:       10,
+		RequestTimeoutSeconds: 5,
+	})
+	if err == nil {
+		t.Fatal("expected batch failure")
+	}
+	if len(result.RecordsAdded) != 0 || len(result.Messages) != 0 {
+		t.Fatalf("expected no successful record messages before failed batch, got result=%#v", result)
+	}
+}
+
+func sourceSyncerTestData(r *http.Request) map[string]any {
+	switch r.URL.Path {
+	case "/health":
+		return map[string]any{"success": true, "data": map[string]string{"status": "ok"}}
+	case "/dns/zones":
+		return map[string]any{"success": true, "data": []dns.Zone{{Name: "example.com", Type: "Primary"}}}
+	case "/dns/records/query":
+		return map[string]any{"success": true, "data": []dns.Record{{ZoneID: "example.com", Name: "www", Type: "A", Value: "10.0.0.1", TTL: 60}}}
+	default:
+		return map[string]any{"success": false, "error": map[string]string{"code": "NOT_FOUND", "message": "not found"}}
+	}
+}
+
+func targetSyncerTestData(r *http.Request) map[string]any {
+	switch r.URL.Path {
+	case "/health":
+		return map[string]any{"success": true, "data": map[string]string{"status": "ok"}}
+	case "/dns/zones":
+		return map[string]any{"success": true, "data": []dns.Zone{{Name: "example.com", Type: "Primary"}}}
+	case "/dns/records/query":
+		return map[string]any{"success": true, "data": []dns.Record{}}
+	default:
+		return map[string]any{"success": false, "error": map[string]string{"code": "NOT_FOUND", "message": "not found"}}
+	}
+}
+
+func writeSyncerTestEnvelope(t *testing.T, w http.ResponseWriter, body map[string]any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	if success, _ := body["success"].(bool); !success {
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		t.Fatalf("write response: %v", err)
 	}
 }

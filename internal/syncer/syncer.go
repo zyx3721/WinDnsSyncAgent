@@ -226,26 +226,26 @@ func syncZone(ctx context.Context, cfg config.Sync, source, target client, selec
 	for start := 0; start < len(updates); start += recordBatchSize {
 		end := min(start+recordBatchSize, len(updates))
 		batchUpdates := updates[start:end]
-		addPlannedRecordMessages(&result, logger, zoneName, nil, nil, batchUpdates)
 		if err := target.applyRecordBatch(ctx, zoneName, dns.RecordBatch{Update: batchUpdates}); err != nil {
 			return result, fmt.Errorf("update record batch for %s: %w", zoneName, err)
 		}
+		addPlannedRecordMessages(&result, logger, zoneName, nil, nil, batchUpdates)
 	}
 	for start := 0; start < len(adds); start += recordBatchSize {
 		end := min(start+recordBatchSize, len(adds))
 		batchAdds := adds[start:end]
-		addPlannedRecordMessages(&result, logger, zoneName, batchAdds, nil, nil)
 		if err := target.applyRecordBatch(ctx, zoneName, dns.RecordBatch{Add: batchAdds}); err != nil {
 			return result, fmt.Errorf("add record batch for %s: %w", zoneName, err)
 		}
+		addPlannedRecordMessages(&result, logger, zoneName, batchAdds, nil, nil)
 	}
 	for start := 0; start < len(deletes); start += recordBatchSize {
 		end := min(start+recordBatchSize, len(deletes))
 		batchDeletes := deletes[start:end]
-		addPlannedRecordMessages(&result, logger, zoneName, nil, batchDeletes, nil)
 		if err := target.applyRecordBatch(ctx, zoneName, dns.RecordBatch{Delete: batchDeletes}); err != nil {
 			return result, fmt.Errorf("delete record batch for %s: %w", zoneName, err)
 		}
+		addPlannedRecordMessages(&result, logger, zoneName, nil, batchDeletes, nil)
 	}
 	return result, nil
 }
