@@ -7,6 +7,49 @@ $ErrorActionPreference = "Stop"
 $script:instanceMutex = $null
 $script:jsonSerializer = $null
 
+function Unescape-JsonStringValue {
+  param([string]$Value)
+  if ($null -eq $Value) { return "" }
+  $builder = New-Object System.Text.StringBuilder
+  for ($i = 0; $i -lt $Value.Length; $i++) {
+    $ch = $Value[$i]
+    if (($ch -ne "\") -or ($i + 1 -ge $Value.Length)) {
+      [void]$builder.Append($ch)
+      continue
+    }
+    $i++
+    $escaped = $Value[$i]
+    switch ($escaped) {
+      '"' { [void]$builder.Append('"') }
+      "\" { [void]$builder.Append("\") }
+      "/" { [void]$builder.Append("/") }
+      "b" { [void]$builder.Append([char]8) }
+      "f" { [void]$builder.Append([char]12) }
+      "n" { [void]$builder.Append("`n") }
+      "r" { [void]$builder.Append("`r") }
+      "t" { [void]$builder.Append("`t") }
+      "u" {
+        if ($i + 4 -lt $Value.Length) {
+          $hex = $Value.Substring($i + 1, 4)
+          try {
+            [void]$builder.Append([char]([Convert]::ToInt32($hex, 16)))
+            $i += 4
+          }
+          catch {
+            [void]$builder.Append("\u" + $hex)
+            $i += 4
+          }
+        }
+        else {
+          [void]$builder.Append("\u")
+        }
+      }
+      default { [void]$builder.Append($escaped) }
+    }
+  }
+  return $builder.ToString()
+}
+
 function Enter-SingleInstance {
   param([string]$Name)
   $script:instanceMutex = New-Object System.Threading.Mutex($false, $Name)
@@ -27,7 +70,7 @@ function Exit-SingleInstance {
 function Get-JsonStringValue {
   param([string]$Raw, [string]$Name, [string]$DefaultValue)
   $match = [Regex]::Match($Raw, '"' + [Regex]::Escape($Name) + '"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"')
-  if ($match.Success) { return $match.Groups[1].Value.Replace('\\', '\') }
+  if ($match.Success) { return Unescape-JsonStringValue -Value $match.Groups[1].Value }
   return $DefaultValue
 }
 
@@ -98,17 +141,231 @@ function Test-BlankString {
   return ([string]$Value).Trim().Length -eq 0
 }
 
-function Read-JsonBody {
+function Read-RequestBodyText {
   param([System.Net.HttpListenerRequest]$Request)
-  if (-not $Request.HasEntityBody) { return $null }
+  if (-not $Request.HasEntityBody) { return "" }
 
   $reader = New-Object System.IO.StreamReader($Request.InputStream, $Request.ContentEncoding)
   try {
-    $raw = $reader.ReadToEnd()
+    return $reader.ReadToEnd()
   }
   finally {
     $reader.Close()
   }
+}
+
+function Read-ZoneQueryBody {
+  param([System.Net.HttpListenerRequest]$Request)
+  $raw = Read-RequestBodyText -Request $Request
+  if (Test-BlankString $raw) { throw "zone is required" }
+  $zoneName = Get-JsonStringValue -Raw $raw -Name "zone" -DefaultValue ""
+  if (Test-BlankString $zoneName) { throw "zone is required" }
+  return $zoneName
+}
+
+function Skip-JsonWhitespace {
+  param([string]$Raw, [int]$Index)
+  while (($Index -lt $Raw.Length) -and [char]::IsWhiteSpace($Raw[$Index])) {
+    $Index++
+  }
+  return $Index
+}
+
+function Find-JsonValueRange {
+  param([string]$Raw, [string]$Name)
+  $property = [Regex]::Match($Raw, '"' + [Regex]::Escape($Name) + '"\s*:', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+  if (-not $property.Success) { return $null }
+
+  $start = Skip-JsonWhitespace -Raw $Raw -Index ($property.Index + $property.Length)
+  if ($start -ge $Raw.Length) { return $null }
+
+  $open = $Raw[$start]
+  if (($open -eq "{") -or ($open -eq "[")) {
+    $close = if ($open -eq "{") { "}" } else { "]" }
+    $depth = 0
+    $inString = $false
+    $escaped = $false
+    for ($i = $start; $i -lt $Raw.Length; $i++) {
+      $ch = $Raw[$i]
+      if ($inString) {
+        if ($escaped) {
+          $escaped = $false
+        }
+        elseif ($ch -eq "\") {
+          $escaped = $true
+        }
+        elseif ($ch -eq '"') {
+          $inString = $false
+        }
+        continue
+      }
+      if ($ch -eq '"') {
+        $inString = $true
+        continue
+      }
+      if ($ch -eq $open) { $depth++ }
+      elseif ($ch -eq $close) {
+        $depth--
+        if ($depth -eq 0) {
+          return @{ Start = $start; Length = ($i - $start + 1) }
+        }
+      }
+    }
+    throw "invalid JSON body"
+  }
+
+  if ($open -eq '"') {
+    $escaped = $false
+    for ($i = $start + 1; $i -lt $Raw.Length; $i++) {
+      $ch = $Raw[$i]
+      if ($escaped) {
+        $escaped = $false
+      }
+      elseif ($ch -eq "\") {
+        $escaped = $true
+      }
+      elseif ($ch -eq '"') {
+        return @{ Start = $start; Length = ($i - $start + 1) }
+      }
+    }
+    throw "invalid JSON body"
+  }
+
+  for ($i = $start; $i -lt $Raw.Length; $i++) {
+    $ch = $Raw[$i]
+    if (($ch -eq ",") -or ($ch -eq "}") -or ($ch -eq "]")) {
+      return @{ Start = $start; Length = ($i - $start) }
+    }
+  }
+  return @{ Start = $start; Length = ($Raw.Length - $start) }
+}
+
+function Get-JsonPropertyRawValue {
+  param([string]$Raw, [string]$Name)
+  $range = Find-JsonValueRange -Raw $Raw -Name $Name
+  if ($null -eq $range) { return "" }
+  return $Raw.Substring([int]$range.Start, [int]$range.Length).Trim()
+}
+
+function Split-JsonArrayObjects {
+  param([string]$Raw)
+  $items = New-Object System.Collections.ArrayList
+  $text = ([string]$Raw).Trim()
+  if (Test-BlankString $text) { return $items }
+  if (($text[0] -ne "[") -or ($text[$text.Length - 1] -ne "]")) { throw "expected JSON array" }
+
+  $depth = 0
+  $inString = $false
+  $escaped = $false
+  $start = -1
+  for ($i = 1; $i -lt ($text.Length - 1); $i++) {
+    $ch = $text[$i]
+    if ($inString) {
+      if ($escaped) {
+        $escaped = $false
+      }
+      elseif ($ch -eq "\") {
+        $escaped = $true
+      }
+      elseif ($ch -eq '"') {
+        $inString = $false
+      }
+      continue
+    }
+    if ($ch -eq '"') {
+      $inString = $true
+      continue
+    }
+    if ($ch -eq "{") {
+      if ($depth -eq 0) { $start = $i }
+      $depth++
+      continue
+    }
+    if ($ch -eq "}") {
+      $depth--
+      if (($depth -eq 0) -and ($start -ge 0)) {
+        [void]$items.Add($text.Substring($start, $i - $start + 1))
+        $start = -1
+      }
+      continue
+    }
+  }
+  if ($depth -ne 0 -or $inString) { throw "invalid JSON array" }
+  return $items
+}
+
+function Convert-JsonRecordObject {
+  param([string]$Raw)
+  $record = New-Object PSObject
+  Add-Member -InputObject $record -MemberType NoteProperty -Name id -Value (Get-JsonStringValue -Raw $Raw -Name "id" -DefaultValue "")
+  Add-Member -InputObject $record -MemberType NoteProperty -Name zoneId -Value (Get-JsonStringValue -Raw $Raw -Name "zoneId" -DefaultValue "")
+  Add-Member -InputObject $record -MemberType NoteProperty -Name name -Value (Get-JsonStringValue -Raw $Raw -Name "name" -DefaultValue "")
+  Add-Member -InputObject $record -MemberType NoteProperty -Name type -Value (Get-JsonStringValue -Raw $Raw -Name "type" -DefaultValue "")
+  Add-Member -InputObject $record -MemberType NoteProperty -Name value -Value (Get-JsonStringValue -Raw $Raw -Name "value" -DefaultValue "")
+  Add-Member -InputObject $record -MemberType NoteProperty -Name ttl -Value (Get-JsonIntValue -Raw $Raw -Name "ttl" -DefaultValue 3600)
+  Add-Member -InputObject $record -MemberType NoteProperty -Name createPtr -Value (Get-JsonBoolValue -Raw $Raw -Name "createPtr" -DefaultValue $false)
+  Add-Member -InputObject $record -MemberType NoteProperty -Name updatedAt -Value (Get-JsonStringValue -Raw $Raw -Name "updatedAt" -DefaultValue "")
+  return $record
+}
+
+function Convert-JsonRecordArray {
+  param([string]$Raw)
+  $records = New-Object System.Collections.ArrayList
+  $text = ([string]$Raw).Trim()
+  if ((Test-BlankString $text) -or ($text.ToLowerInvariant() -eq "null")) { return $records }
+  foreach ($item in @(Split-JsonArrayObjects -Raw $Raw)) {
+    [void]$records.Add((Convert-JsonRecordObject -Raw $item))
+  }
+  return $records
+}
+
+function Convert-JsonUpdateArray {
+  param([string]$Raw)
+  $updates = New-Object System.Collections.ArrayList
+  $text = ([string]$Raw).Trim()
+  if ((Test-BlankString $text) -or ($text.ToLowerInvariant() -eq "null")) { return $updates }
+  foreach ($item in @(Split-JsonArrayObjects -Raw $Raw)) {
+    $oldRaw = Get-JsonPropertyRawValue -Raw $item -Name "old"
+    $newRaw = Get-JsonPropertyRawValue -Raw $item -Name "new"
+    if ((Test-BlankString $oldRaw) -or (Test-BlankString $newRaw)) { continue }
+    $update = New-Object PSObject
+    Add-Member -InputObject $update -MemberType NoteProperty -Name old -Value (Convert-JsonRecordObject -Raw $oldRaw)
+    Add-Member -InputObject $update -MemberType NoteProperty -Name new -Value (Convert-JsonRecordObject -Raw $newRaw)
+    [void]$updates.Add($update)
+  }
+  return $updates
+}
+
+function Convert-RecordBatchBodyText {
+  param([string]$Raw)
+  $raw = [string]$Raw
+  if (Test-BlankString $raw) { throw "zone is required" }
+
+  $zoneName = Get-JsonStringValue -Raw $raw -Name "zone" -DefaultValue ""
+  if (Test-BlankString $zoneName) { throw "zone is required" }
+
+  $batchRaw = Get-JsonPropertyRawValue -Raw $raw -Name "batch"
+  if (Test-BlankString $batchRaw) { throw "batch is required" }
+
+  $batch = New-Object PSObject
+  Add-Member -InputObject $batch -MemberType NoteProperty -Name update -Value (Convert-JsonUpdateArray -Raw (Get-JsonPropertyRawValue -Raw $batchRaw -Name "update"))
+  Add-Member -InputObject $batch -MemberType NoteProperty -Name add -Value (Convert-JsonRecordArray -Raw (Get-JsonPropertyRawValue -Raw $batchRaw -Name "add"))
+  Add-Member -InputObject $batch -MemberType NoteProperty -Name delete -Value (Convert-JsonRecordArray -Raw (Get-JsonPropertyRawValue -Raw $batchRaw -Name "delete"))
+
+  $result = New-Object PSObject
+  Add-Member -InputObject $result -MemberType NoteProperty -Name zone -Value $zoneName
+  Add-Member -InputObject $result -MemberType NoteProperty -Name batch -Value $batch
+  return $result
+}
+
+function Read-RecordBatchBody {
+  param([System.Net.HttpListenerRequest]$Request)
+  return Convert-RecordBatchBodyText -Raw (Read-RequestBodyText -Request $Request)
+}
+
+function Read-JsonBody {
+  param([System.Net.HttpListenerRequest]$Request)
+  $raw = Read-RequestBodyText -Request $Request
 
   if (Test-BlankString $raw) { return $null }
   if ($script:jsonSerializer -eq $null) {
@@ -128,6 +385,11 @@ function Get-MapValue {
   if ($null -eq $Map) { return $DefaultValue }
   try {
     if ($Map.ContainsKey($Name) -and $null -ne $Map[$Name]) { return $Map[$Name] }
+  }
+  catch {}
+  try {
+    $property = $Map.PSObject.Properties[$Name]
+    if (($null -ne $property) -and ($null -ne $property.Value)) { return $property.Value }
   }
   catch {}
   return $DefaultValue
@@ -1010,6 +1272,23 @@ try {
         $body = Read-JsonBody -Request $request
         New-LegacyZone -Zone $body
         Send-Envelope -Response $response -StatusCode 200 -Success $true -DataJson '{"created":true}' -ErrorCode "" -ErrorMessage "" -RequestId $requestId
+        continue
+      }
+
+      if ($method -eq "POST" -and $path -eq "/dns/records/query") {
+        $zoneName = Read-ZoneQueryBody -Request $request
+        Send-Envelope -Response $response -StatusCode 200 -Success $true -DataJson (Get-RecordJson -ZoneName $zoneName) -ErrorCode "" -ErrorMessage "" -RequestId $requestId
+        continue
+      }
+
+      if ($method -eq "POST" -and $path -eq "/dns/records/batch") {
+        $body = Read-RecordBatchBody -Request $request
+        $zoneName = [string](Get-MapValue -Map $body -Name "zone" -DefaultValue "")
+        $batch = Get-MapValue -Map $body -Name "batch" -DefaultValue $null
+        if (Test-BlankString $zoneName) { throw "zone is required" }
+        if ($null -eq $batch) { throw "batch is required" }
+        Invoke-LegacyRecordBatch -ZoneName $zoneName -Batch $batch
+        Send-Envelope -Response $response -StatusCode 200 -Success $true -DataJson '{"applied":true}' -ErrorCode "" -ErrorMessage "" -RequestId $requestId
         continue
       }
 

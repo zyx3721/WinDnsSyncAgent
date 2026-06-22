@@ -338,18 +338,22 @@ Legacy Agent 提供与 Go Agent 基本一致的接口：
 - `GET /health`
 - `GET /dns/zones`
 - `GET /dns/zones/{zone}/records`
+- `POST /dns/records/query`
 - `POST /dns/zones`
 - `DELETE /dns/zones/{zone}`
 - `POST /dns/zones/{zone}/records`
 - `DELETE /dns/zones/{zone}/records/{type}/{name}?value={value}`
+- `POST /dns/records/batch`
 - `POST /dns/zones/{zone}/records/batch`
 
-Go Agent 额外提供 body 版记录接口，避免 Zone 名称出现在明文 HTTP URL 路径中：
+Go Agent 和 Legacy Agent 都支持 body 版记录接口，避免 Zone 名称出现在明文 HTTP URL 路径中：
 
 - `POST /dns/records/query`
 - `POST /dns/records/batch`
 
-同步程序会优先调用 Go Agent 的 body 版接口；如果目标端是 2008/2008 R2 Legacy Agent 或旧版 Go Agent，接口返回 `404` 后会自动回退到上方旧路径接口。
+同步程序会优先调用 body 版接口；如果目标端是旧版 Agent，接口返回 `404` 后会自动回退到上方旧路径接口。
+
+Legacy Agent 的 `POST /dns/records/query` 和 `POST /dns/records/batch` 使用脚本内置轻量解析逻辑，不依赖 `.NET System.Web.Extensions`。旧路径写入接口仍保留兼容，复杂 JSON 请求也仍可通过通用解析函数处理。
 
 ## 5.2 前提条件
 
@@ -516,11 +520,11 @@ curl.exe -X POST `
 | `POST` | `/dns/zones` | 支持 | 支持 | 创建 Primary Zone。Legacy Agent 使用 `dnscmd.exe /ZoneAdd`。 |
 | `DELETE` | `/dns/zones/{zone}` | 支持 | 支持 | 删除指定 Zone。`mirror` 模式下可能用于删除目标端多余 Zone。 |
 | `GET` | `/dns/zones/{zone}/records` | 支持 | 支持 | 获取指定 Zone 的解析记录。 |
-| `POST` | `/dns/records/query` | 支持 | 不支持 | 获取指定 Zone 的解析记录，Zone 名称通过 JSON body 的 `zone` 字段传递。同步程序优先使用，Legacy Agent 返回 `404` 后自动回退旧 GET 接口。 |
+| `POST` | `/dns/records/query` | 支持 | 支持 | 获取指定 Zone 的解析记录，Zone 名称通过 JSON body 的 `zone` 字段传递。同步程序优先使用，旧版 Agent 返回 `404` 后自动回退旧 GET 接口。 |
 | `POST` | `/dns/zones/{zone}/records` | 支持 | 支持 | 新增解析记录。Legacy Agent 使用 `dnscmd.exe /RecordAdd`。 |
 | `DELETE` | `/dns/zones/{zone}/records/{type}/{name}?value={value}` | 支持 | 支持 | 删除精确匹配的解析记录。Legacy Agent 使用 `dnscmd.exe /RecordDelete`。 |
 | `POST` | `/dns/zones/{zone}/records/batch` | 支持 | 支持 | 批量新增、删除、更新记录。同步程序主要使用此接口。 |
-| `POST` | `/dns/records/batch` | 支持 | 不支持 | 批量新增、删除、更新记录，Zone 名称通过 JSON body 的 `zone` 字段传递，批次内容通过 `batch` 字段传递。同步程序优先使用，Legacy Agent 返回 `404` 后自动回退旧 batch 接口。 |
+| `POST` | `/dns/records/batch` | 支持 | 支持 | 批量新增、删除、更新记录，Zone 名称通过 JSON body 的 `zone` 字段传递，批次内容通过 `batch` 字段传递。同步程序优先使用，旧版 Agent 返回 `404` 后自动回退旧 batch 接口。 |
 
 当前 Agent API 支持读取记录类型：`A`、`AAAA`、`CNAME`、`MX`、`TXT`、`PTR`、`NS`、`SRV`。Legacy 写操作支持 `A`、`AAAA`、`CNAME`、`MX`、`TXT`、`PTR`、`NS`、`SRV`。
 
